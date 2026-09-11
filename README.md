@@ -2,6 +2,13 @@
 
 Post-install setup for a fresh Arch Linux + KDE Plasma machine.
 
+## Status
+
+**Last confirmed working: 2026-09-11** — Arch Linux, KDE Plasma 6.7.5, GRUB,
+Plasma Login Manager.
+
+Update this line after each clean run on a fresh install.
+
 ## Running it
 
 Run as your **normal user** (it calls `sudo` itself):
@@ -25,41 +32,56 @@ Set `REPO_BRANCH=somebranch` to pull the payload from a different branch.
 
 | # | Step |
 |---|------|
-| 1 | Installs `bluez`/`bluez-utils`, enables and starts `bluetooth.service` |
-| 2 | If more than one kernel is installed, points GRUB (or systemd-boot) at the newest one |
-| 3 | Installs the KDE/Plasma package set, Discover, Flatpak and the XDG portals; adds Flathub |
-| 4 | Asks which browsers you want (Floorp / Firefox / Ungoogled Chromium / Brave) and installs them as Flatpaks |
-| 5 | Grants Floorp read/write access to `$HOME` |
-| 6 | Asks whether to install Thunderbird |
-| 7 | Deploys the `loose/` files (`userChrome.css` per browser profile, both Willow themes, reference notes) |
-| 8 | Asks whether to install the KDE games |
-| 9 | Writes the Dolphin settings |
-| – | Asks for **light or dark mode** and applies the global theme, color scheme and icons |
-| 10 | Sets the Breeze Light cursor theme |
-| 11 | Installs both Willow decorations and applies the one matching your light/dark choice |
-| 12 | Installs the CUPS/foomatic/gutenprint stack and enables `cups.socket` + `cups.service` |
-| 13 | Installs Hunspell/Aspell/Enchant and configures Sonnet for `en_US` |
-| 14 | Rebuilds an identical panel + system tray on every monitor at least 1024px wide |
-| 15 | Installs Wine (offering to enable `[multilib]` first) |
-| 16 | Asks whether to install LibreOffice, Collabora Office, both, or neither |
+| 1 | Adds the Chaotic-AUR repository, if it isn't already configured |
+| 2 | Runs a full `pacman -Syu` |
+| 3 | Installs `bluez`/`bluez-utils`, enables and starts `bluetooth.service` |
+| 4 | If more than one kernel is installed, points GRUB (or systemd-boot) at the newest one |
+| 5 | Installs the KDE/Plasma package set, Discover, Flatpak and the XDG portals; adds Flathub; removes superseded packages; makes Plasma Login Manager the display manager |
+| 6 | Asks which browsers you want (Floorp / Firefox / Ungoogled Chromium / Brave), installs them as Flatpaks, and grants Floorp read/write access to `$HOME` |
+| 7 | Asks whether to install Thunderbird |
+| 8 | Deploys the `loose/` files (`userChrome.css` per browser profile, both Willow themes, reference notes) |
+| 9 | Asks whether to install the KDE games |
+| 10 | Writes the Dolphin settings |
+| 11 | Asks for light or dark mode, then applies the global theme, color scheme and icons |
+| 12 | Sets the Breeze Light cursor theme |
+| 13 | Installs both Willow decorations and applies the one matching your light/dark choice |
+| 14 | Installs the CUPS/foomatic/gutenprint stack and enables `cups.socket` + `cups.service` |
+| 15 | Installs Hunspell/Aspell/Enchant and configures Sonnet for `en_US` |
+| 16 | Rebuilds an identical panel + system tray on every monitor at least 1024px wide |
+| 17 | Installs Wine (offering to enable `[multilib]` first) |
+| 18 | Asks which office suites you want (LibreOffice / Collabora Office), same numbered selection as the browsers |
 
 It is safe to re-run: package installs use `--needed` and config writes are
 idempotent.
 
 ## Notes
 
-- **Step 2** edits `GRUB_DEFAULT` in `/etc/default/grub` and then regenerates
-  the menu with `grub-mkconfig -o /boot/grub/grub.cfg` (the Arch equivalent of
-  `update-grub`). The old file is backed up to `/etc/default/grub.bak.<timestamp>`.
-- **Step 7** can only place `userChrome.css` in a profile that already exists.
+- **Step 4 touches GRUB as little as possible.** It first reads the existing
+  menu and works out which kernel the current `GRUB_DEFAULT` actually boots —
+  numeric (`0`), nested numeric (`1>2`), menuentry-id and `saved` forms are all
+  understood. If that is already the newest kernel, it changes nothing at all
+  and does not regenerate anything. Otherwise it rewrites only the
+  `GRUB_DEFAULT` line and regenerates once with
+  `grub-mkconfig -o /boot/grub/grub.cfg` (the Arch equivalent of
+  `update-grub`), which is unavoidable because `GRUB_DEFAULT` is only read at
+  generation time. Nothing else in `/etc/default/grub` is touched, so
+  `GRUB_BACKGROUND`, `GRUB_THEME` and the rest are carried through. Both
+  `/etc/default/grub` and `/boot/grub/grub.cfg` are backed up to
+  `.bak.<timestamp>` first, and if the regenerated menu has lost its
+  `background_image`/`set theme=` lines the backup is restored automatically.
+- **Step 8** can only place `userChrome.css` in a profile that already exists.
   A freshly installed Flatpak has no profile until you launch it once — if the
   script reports a skip, start the app and re-run.
-- **Step 14** needs a running Plasma session. It deletes the existing panels and
+- **Step 16** needs a running Plasma session. It deletes the existing panels and
   recreates one per screen, so pinned launchers go back to the defaults. The
   layout is copied from the main monitor (the ASUS XG27ACDNG on DP-4):
   bottom, left-aligned, floating, adaptive opacity, `holidaysevents`
   calendar plugin only, and the weather widget hidden in the tray.
-  Panel height is left at the Plasma default.
+  Panel height is inherited from whatever panel is already there, so a rebuild
+  never silently shrinks it — a newly created panel would otherwise be 30px,
+  thinner than the one Plasma itself creates. 30px is used only when there is
+  no existing panel to copy. Force a specific height with
+  `PANEL_HEIGHT=44 bash postinstall.sh`.
   Screens narrower than 1024px are skipped so a small capture/TV output
   doesn't get an unusable taskbar. Override with
   `PANEL_MIN_SCREEN_WIDTH=0 bash postinstall.sh`.
@@ -72,4 +94,38 @@ idempotent.
   System Settings change.
 - The **cursor is Breeze Light in both modes**, by design — it does not follow
   the light/dark choice.
+- **Plasma Login Manager, not SDDM.** `plasma-login-manager` is installed as
+  part of step 5 and enabled as the display manager; `sddm-kcm` is not
+  installed. Only one unit can hold the `display-manager.service` alias, so any
+  existing display manager is disabled first — and if enabling fails, the
+  previous one is put back so the machine is never left without a login screen.
+  It is enabled but **not** started, since switching display managers mid-session
+  would kill the running desktop: it takes effect on the next reboot. An SDDM
+  that is already installed is left on disk, just disabled.
+- The **login screen follows the light/dark choice too.** The greeter runs as
+  its own system user and reads its own config, not yours, which is why it
+  otherwise stays light. The script writes the color scheme, icon theme and
+  global theme into `/var/lib/plasmalogin/.config/kdeglobals`, owned by the
+  `plasmalogin` user.
+- **Chaotic-AUR** is set up before anything is installed, so its packages are
+  available to every later step. **No key is hardcoded.** The script downloads
+  `chaotic-keyring.pkg.tar.zst`, reads the fingerprints the keyring itself
+  declares as trusted (`chaotic-trusted`), prints them, and imports and locally
+  signs exactly those — so a key rotation or an added key is picked up
+  automatically. It then installs the keyring and mirrorlist from their URLs so
+  pacman verifies each `.sig` against the keys just trusted, and the keyring's
+  own install hook runs a full populate (which applies revocations). Finally it
+  appends a `[chaotic-aur]` section to `/etc/pacman.conf` (backed up first).
+  Skipped entirely if `[chaotic-aur]` is already present. This is a third-party
+  repository — adding it means trusting its maintainers to ship packages that
+  run as root on your machine.
+- **Photos instead of Gwenview.** Photos is packaged as `koko`, and as of
+  KDE Gear 26.08 it is [proposed as Gwenview's replacement][photos]. The script
+  installs `koko` and removes `gwenview` if a previous install left it behind
+  (`pacman -Rns`, skipped when it isn't installed, reported rather than forced
+  if something still requires it). Add packages to `PKGS_REMOVE` to retire
+  others the same way.
+
+[photos]: https://pointieststick.com/2026/09/06/photos-a-proposed-replacement-for-gwenview/
+
 - `cups-browsed` is installed but left disabled, matching the reference system.

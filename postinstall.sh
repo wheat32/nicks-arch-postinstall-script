@@ -18,6 +18,11 @@ WORKDIR=""
 LOOSE=""
 FAILURES=()
 
+# Chaotic-AUR bootstrap. No key is hardcoded: the keyring package declares its
+# own trusted fingerprints, so they are read out of it at run time and a key
+# rotation is picked up automatically.
+CHAOTIC_CDN="https://cdn-mirror.chaotic.cx/chaotic-aur"
+
 # ---------------------------------------------------------------- helpers ---
 
 C_RESET=$'\033[0m'; C_BOLD=$'\033[1m'
@@ -37,6 +42,33 @@ trap cleanup EXIT
 # -r on /dev/tty is not enough: the file can exist and still fail to open when
 # there is no controlling terminal. Actually try it.
 have_tty() { { : </dev/tty; } 2>/dev/null; }
+
+# Present a numbered menu and collect a space-separated selection ("1 3"), or
+# nothing for none. Results land in SELECTED as 1-based indices, de-duplicated
+# and in the order the user typed them.
+SELECTED=()
+ask_multi() {
+    local names=( "$@" ) i n x seen picks=()
+    SELECTED=()
+
+    echo
+    for i in "${!names[@]}"; do
+        printf '      %d) %s\n' $((i + 1)) "${names[$i]}"
+    done
+    echo
+    info "Enter the numbers you want, space separated (e.g. \"1 2\"), or blank for none."
+    read -r -p "    Selection: " -a picks </dev/tty
+
+    for n in "${picks[@]}"; do
+        if ! [[ "$n" =~ ^[0-9]+$ ]] || (( n < 1 || n > ${#names[@]} )); then
+            warn "Ignoring '$n'."
+            continue
+        fi
+        seen=0
+        for x in "${SELECTED[@]}"; do [[ "$x" == "$n" ]] && seen=1; done
+        (( seen )) || SELECTED+=( "$n" )
+    done
+}
 
 # Ask a yes/no question. Default is "no" unless $2 is "y".
 ask_yn() {
@@ -59,8 +91,8 @@ PKGS_BASE=(
     discover flatpak
     xdg-desktop-portal xdg-desktop-portal-gtk xdg-desktop-portal-kde
     # --- KDE applications / utilities ---
-    ark dolphin dolphin-plugins filelight gwenview isoimagewriter kate kcalc
-    kcharselect kclock kcron kdf kdialog kjournald kolourpaint konsole ksystemlog
+    ark dolphin dolphin-plugins filelight koko isoimagewriter kate kcalc
+    kcharselect kclock kcron kdf kdialog kjournald kolourpaint konsole kup ksystemlog
     ktorrent kwalletmanager kweather okular partitionmanager sweeper
     kamera kamoso kdeconnect kdegraphics-mobipocket kdegraphics-thumbnailers
     kdenetwork-filesharing kio-admin kio-extras krdc ffmpegthumbs
@@ -75,7 +107,7 @@ PKGS_BASE=(
     kdeplasma-addons systemsettings kinfocenter kmenuedit kscreen libkscreen
     kscreenlocker kwrited krdp kglobalacceld kactivitymanagerd ksystemstats
     libksysguard kpipewire milou powerdevil knighttime layer-shell-qt
-    drkonqi polkit-kde-agent kwallet-pam sddm-kcm kgamma spectacle
+    drkonqi polkit-kde-agent kwallet-pam plasma-login-manager kgamma spectacle
     kde-cli-tools kwayland kwayland-integration flatpak-kcm plymouth-kcm
     print-manager
     # --- window manager + decorations ---
@@ -88,6 +120,11 @@ PKGS_BASE=(
 )
 
 PKGS_GAMES=( kbreakout kmahjongg kmines kpat ksudoku libkdegames )
+
+# Superseded packages. Photos (package name "koko") is proposed as Gwenview's
+# replacement as of KDE Gear 26.08, so install that instead and take Gwenview
+# back off the system if an earlier install left it there.
+PKGS_REMOVE=( gwenview )
 
 PKGS_PRINT=(
     cups cups-browsed cups-filters cups-pdf
@@ -110,6 +147,13 @@ BROWSER_IDS=(
 )
 BROWSER_NAMES=( "Floorp" "Firefox" "Ungoogled Chromium" "Brave" )
 
+# Office suites offered in step 16.
+OFFICE_IDS=( "org.libreoffice.LibreOffice" "com.collaboraoffice.Office" )
+OFFICE_NAMES=(
+    "LibreOffice      -- tried and true"
+    "Collabora Office -- newer, closer to the Microsoft Office look"
+)
+
 # Populated as the run goes, so later steps know what actually got installed.
 INSTALL_FLOORP=0
 INSTALL_THUNDERBIRD=0
@@ -130,6 +174,23 @@ pac_install() {
     sudo pacman -S --needed --noconfirm "$@"
 }
 
+# Remove packages that are installed, leaving the rest alone. Anything still
+# required by another package is reported rather than forced out.
+pac_remove() {
+    local pkg present=()
+    for pkg in "$@"; do
+        pacman -Qq "$pkg" >/dev/null 2>&1 && present+=( "$pkg" )
+    done
+    (( ${#present[@]} )) || return 0
+
+    info "Removing: ${present[*]}"
+    if sudo pacman -Rns --noconfirm "${present[@]}"; then
+        ok "Removed: ${present[*]}"
+    else
+        fail "Could not remove: ${present[*]} (still required by something?)"
+    fi
+}
+
 flatpak_install() {
     (( $# )) || return 0
     sudo flatpak install -y --system --noninteractive flathub "$@"
@@ -144,22 +205,24 @@ show_intro() {
 
   This sets up a fresh Arch Linux + KDE Plasma install. It will:
 
-     1.  Enable and start Bluetooth
-     2.  Point the bootloader at the newest installed kernel
-     3.  Install the KDE/Plasma packages, Discover, Flatpak and XDG portals
-     4.  Install the browsers you pick, as Flatpaks
-     5.  Give Floorp read/write access to your home directory
-     6.  Install Thunderbird, if you want it
-     7.  Drop the userChrome.css files and window decorations into place
-     8.  Install the KDE games, if you want them
-     9.  Apply your Dolphin settings
-    10.  Set the Breeze Light cursor
-    11.  Apply the Willow window decorations
-    12.  Install and enable printing (CUPS, foomatic, gutenprint)
-    13.  Install Hunspell and configure spell checking for en_US
-    14.  Rebuild a matching panel and system tray on every monitor
-    15.  Install Wine
-    16.  Install an office suite, if you want one
+     1.  Add the Chaotic-AUR repository
+     2.  Fully update the system
+     3.  Enable and start Bluetooth
+     4.  Point the bootloader at the newest installed kernel
+     5.  Install the KDE/Plasma packages, Discover, Flatpak and XDG portals
+     6.  Install the browsers you pick, as Flatpaks
+     7.  Install Thunderbird, if you want it
+     8.  Drop the userChrome.css files and window decorations into place
+     9.  Install the KDE games, if you want them
+    10.  Apply your Dolphin settings
+    11.  Apply light or dark mode
+    12.  Set the Breeze Light cursor
+    13.  Apply the Willow window decorations
+    14.  Install and enable printing (CUPS, foomatic, gutenprint)
+    15.  Install Hunspell and configure spell checking for en_US
+    16.  Rebuild a matching panel and system tray on every monitor
+    17.  Install Wine
+    18.  Install an office suite, if you want one
 
   You will be asked about:
 
@@ -167,12 +230,17 @@ show_intro() {
     - Thunderbird
     - The KDE games
     - Light or dark mode
-    - An office suite (LibreOffice, Collabora Office, both, or neither)
+    - Which office suites you want (LibreOffice, Collabora Office)
 
   Worth knowing before you start:
 
-    - It runs a full system upgrade (pacman -Syu) first
+    - It adds the Chaotic-AUR repository: this imports and locally signs
+      that project's GPG key and installs its keyring from its CDN
+    - It makes Plasma Login Manager your display manager, disabling any
+      existing one; this takes effect on the next reboot
+    - It then runs a full system upgrade (pacman -Syu)
     - It asks for your sudo password up front, and keeps it alive
+    - /etc/pacman.conf is backed up before it is edited
     - /etc/default/grub is backed up before it is edited
     - Your Plasma panels are deleted and rebuilt, which resets pinned
       launchers back to the defaults
@@ -204,7 +272,7 @@ preflight() {
         err "pacman not found -- this script is for Arch Linux."
         exit 1
     fi
-    for c in curl tar sudo; do
+    for c in curl tar bsdtar sudo; do
         command -v "$c" >/dev/null || { err "Missing required tool: $c"; exit 1; }
     done
 
@@ -221,14 +289,7 @@ preflight() {
     # Keep sudo alive for the whole run.
     while true; do sudo -n true; sleep 50; kill -0 "$$" 2>/dev/null || exit; done 2>/dev/null &
 
-    # A bare `pacman -Sy` followed by `-S` is a partial upgrade, which Arch
-    # warns against, so bring the whole system up to date instead.
-    info "Synchronizing databases and updating the system..."
-    if sudo pacman -Syu --noconfirm; then
-        ok "System up to date."
-    else
-        warn "Full upgrade had trouble; continuing anyway."
-    fi
+    ok "Ready."
 }
 
 # Always pull the loose/ payload from GitHub rather than trusting the cwd.
@@ -249,10 +310,103 @@ fetch_payload() {
     ok "Payload ready at $LOOSE"
 }
 
+# ------------------------------------------------------ Chaotic-AUR ---------
+
+setup_chaotic_aur() {
+    step "1. Chaotic-AUR repository"
+
+    if grep -qE '^[[:space:]]*\[chaotic-aur\]' /etc/pacman.conf; then
+        ok "[chaotic-aur] is already configured; nothing to do."
+        return 0
+    fi
+
+    local dir="$WORKDIR/chaotic"
+    mkdir -p "$dir"
+
+    info "Fetching the Chaotic-AUR keyring..."
+    if ! curl -fsSL -o "$dir/chaotic-keyring.pkg.tar.zst" \
+            "$CHAOTIC_CDN/chaotic-keyring.pkg.tar.zst"; then
+        fail "Could not download the Chaotic-AUR keyring; skipping the repository."
+        return 1
+    fi
+
+    # The keyring package ships both the key material (chaotic.gpg) and the
+    # list of fingerprints it considers trusted (chaotic-trusted). Reading the
+    # fingerprints from there means the script never has to hardcode a key and
+    # keeps working if the project rotates or adds one.
+    if ! bsdtar -xf "$dir/chaotic-keyring.pkg.tar.zst" -C "$dir" \
+            usr/share/pacman/keyrings/ 2>/dev/null; then
+        fail "Could not unpack the Chaotic-AUR keyring; skipping the repository."
+        return 1
+    fi
+
+    local kr="$dir/usr/share/pacman/keyrings"
+    local keys=() k
+    if [[ -r "$kr/chaotic-trusted" ]]; then
+        mapfile -t keys < <(awk -F: '/^[0-9A-Fa-f]{40}:/ {print $1}' "$kr/chaotic-trusted")
+    fi
+    if (( ${#keys[@]} == 0 )) || [[ ! -r "$kr/chaotic.gpg" ]]; then
+        fail "The Chaotic-AUR keyring declared no trusted keys; skipping the repository."
+        return 1
+    fi
+
+    info "Keys the keyring declares as trusted:"
+    for k in "${keys[@]}"; do info "  $k"; done
+
+    info "Importing and locally signing them..."
+    if ! sudo pacman-key --add "$kr/chaotic.gpg"; then
+        fail "Could not import the Chaotic-AUR keys; skipping the repository."
+        return 1
+    fi
+    for k in "${keys[@]}"; do
+        if ! sudo pacman-key --lsign-key "$k"; then
+            fail "Could not locally sign Chaotic-AUR key $k; skipping the repository."
+            return 1
+        fi
+    done
+
+    # Installed from the URLs so pacman fetches each .sig and verifies it
+    # against the keys just trusted. The keyring package's own install hook
+    # then runs a full populate, which also applies revocations.
+    info "Installing chaotic-keyring and chaotic-mirrorlist..."
+    if ! sudo pacman -U --needed --noconfirm \
+            "$CHAOTIC_CDN/chaotic-keyring.pkg.tar.zst" \
+            "$CHAOTIC_CDN/chaotic-mirrorlist.pkg.tar.zst"; then
+        fail "Could not install the Chaotic-AUR keyring/mirrorlist."
+        return 1
+    fi
+
+    info "Adding [chaotic-aur] to /etc/pacman.conf..."
+    sudo cp /etc/pacman.conf "/etc/pacman.conf.bak.$(date +%Y%m%d%H%M%S)"
+    printf '\n[chaotic-aur]\nInclude = /etc/pacman.d/chaotic-mirrorlist\n' \
+        | sudo tee -a /etc/pacman.conf >/dev/null
+
+    if grep -qE '^[[:space:]]*\[chaotic-aur\]' /etc/pacman.conf; then
+        ok "[chaotic-aur] enabled."
+    else
+        fail "Failed to add [chaotic-aur] to /etc/pacman.conf."
+    fi
+}
+
+# ------------------------------------------------------- system update ------
+
+# Runs after the repositories are set up, so the new ones are picked up here
+# instead of needing a second sync. A bare `pacman -Sy` followed by `-S` is a
+# partial upgrade, which Arch warns against, so always do the full -Syu.
+system_update() {
+    step "2. System update"
+    info "Synchronizing databases and updating the system..."
+    if sudo pacman -Syu --noconfirm; then
+        ok "System up to date."
+    else
+        warn "Full upgrade had trouble; continuing anyway."
+    fi
+}
+
 # ------------------------------------------------------- 1. bluetooth -------
 
 setup_bluetooth() {
-    step "1. Bluetooth"
+    step "3. Bluetooth"
     pac_install bluez bluez-utils || fail "bluez install failed"
     if sudo systemctl enable --now bluetooth.service; then
         ok "bluetooth.service enabled and started."
@@ -298,67 +452,127 @@ latest_kernel() {
     printf '%s\n' "$best"
 }
 
-# Walk grub.cfg and emit "<GRUB_DEFAULT value>|<vmlinuz path>" for every entry,
-# building the "submenu_id>entry_id" form for nested entries.
+# Walk grub.cfg and emit "<positional path>|<id path>|<kernel image>" for every
+# entry, covering both the numeric form GRUB_DEFAULT accepts (0, 1>2) and the
+# more robust menuentry-id form.
 grub_entry_map() {
     sudo awk '
         function id_of(line,   n, a) {
-            # menuentry ids are emitted as: $menuentry_id_option '\''some-id'\''
             n = index(line, "menuentry_id_option")
             if (n == 0) return ""
             a = substr(line, n)
-            n = index(a, "'\''")
-            if (n == 0) return ""
+            n = index(a, "\047"); if (n == 0) return ""
             a = substr(a, n + 1)
-            n = index(a, "'\''")
-            if (n == 0) return ""
+            n = index(a, "\047"); if (n == 0) return ""
             return substr(a, 1, n - 1)
         }
-        /^[[:space:]]*submenu[[:space:]]/ { sub_id = id_of($0); next }
-        /^[[:space:]]*menuentry[[:space:]]/ {
-            cur = id_of($0)
-            if (sub_id != "" && match($0, /^[[:space:]]+menuentry/)) cur = sub_id ">" cur
+        BEGIN { top = -1; subidx = -1; sub_id = "" }
+        /^[[:space:]]*submenu[[:space:]]/ { top++; sub_id = id_of($0); subidx = -1; next }
+        /^[[:space:]]+menuentry[[:space:]]/ {
+            if (sub_id != "") {
+                subidx++
+                cur_pos = top ">" subidx
+                cur_id  = sub_id ">" id_of($0)
+            }
             next
         }
-        /^[[:space:]]*}/ { if (sub_id != "" && $0 !~ /^[[:space:]]+}/) sub_id = "" ; next }
+        /^menuentry[[:space:]]/ { top++; cur_pos = top; cur_id = id_of($0); next }
+        /^}/ { sub_id = ""; next }
         /^[[:space:]]*linux(16|efi)?[[:space:]]/ {
-            if (cur != "") { print cur "|" $2; cur = "" }
+            if (cur_id != "") { print cur_pos "|" cur_id "|" $2; cur_id = "" }
         }
     ' /boot/grub/grub.cfg
 }
 
+# What does the current GRUB_DEFAULT actually boot? Echoes the kernel image.
+grub_current_kernel() {
+    local default pos id kernel
+    default="$(awk -F= '/^[[:space:]]*GRUB_DEFAULT=/ {
+                   v = $2; gsub(/^[\047"]|[\047"]$/, "", v); print v; exit }' /etc/default/grub)"
+    [[ -n "$default" ]] || default="0"
+
+    if [[ "$default" == "saved" ]]; then
+        default="$(sudo awk -F= '/^saved_entry=/ {print $2; exit}' /boot/grub/grubenv 2>/dev/null)"
+        [[ -n "$default" ]] || return 1
+    fi
+
+    while IFS='|' read -r pos id kernel; do
+        if [[ "$default" == "$pos" || "$default" == "$id" ]]; then
+            printf '%s\n' "$kernel"
+            return 0
+        fi
+    done < <(grub_entry_map)
+    return 1
+}
+
+# Count the directives that draw a background or theme, so a regeneration that
+# silently drops them can be caught and rolled back.
+grub_decor_count() {
+    sudo grep -cE '^[[:space:]]*(background_image|set[[:space:]]+theme=)' \
+        /boot/grub/grub.cfg 2>/dev/null || echo 0
+}
+
 setup_grub_default() {
-    local latest_img="$1" latest_base entry target=""
+    local latest_img="$1" latest_base entry pos id kernel target="" current
     latest_base="$(basename "$latest_img")"
 
-    info "Regenerating grub.cfg so the menu reflects the installed kernels..."
-    sudo grub-mkconfig -o /boot/grub/grub.cfg >/dev/null 2>&1 \
-        || { fail "grub-mkconfig failed"; return 1; }
-
-    while IFS='|' read -r entry kernelpath; do
-        [[ "$(basename "$kernelpath")" == "$latest_base" ]] || continue
-        # Prefer a top-level entry; only fall back to a nested one.
-        if [[ "$entry" != *">"* ]]; then target="$entry"; break; fi
-        [[ -z "$target" ]] && target="$entry"
-    done < <(grub_entry_map)
-
-    if [[ -z "$target" ]]; then
-        fail "Could not find a GRUB entry for $latest_base; leaving GRUB_DEFAULT alone."
+    if [[ ! -r /boot/grub/grub.cfg ]] && ! sudo test -r /boot/grub/grub.cfg; then
+        fail "/boot/grub/grub.cfg is not readable; leaving GRUB alone."
         return 1
     fi
 
-    info "Setting GRUB_DEFAULT to '$target'"
-    sudo cp /etc/default/grub "/etc/default/grub.bak.$(date +%Y%m%d%H%M%S)"
-    if grep -qE '^[[:space:]]*GRUB_DEFAULT=' /etc/default/grub; then
+    # Nothing to do if the existing default already boots the newest kernel.
+    # This is the common case on a system that is already set up correctly,
+    # and it means the script does not touch GRUB at all.
+    if current="$(grub_current_kernel)" && [[ "$(basename "$current")" == "$latest_base" ]]; then
+        ok "GRUB already boots $latest_base by default; leaving it untouched."
+        return 0
+    fi
+
+    # Read the menu as it stands -- no pre-emptive regeneration.
+    while IFS='|' read -r pos id kernel; do
+        [[ "$(basename "$kernel")" == "$latest_base" ]] || continue
+        if [[ "$id" != *">"* ]]; then target="$id"; break; fi
+        [[ -z "$target" ]] && target="$id"
+    done < <(grub_entry_map)
+
+    if [[ -z "$target" ]]; then
+        fail "No GRUB entry for $latest_base in the current menu; leaving GRUB alone."
+        return 1
+    fi
+
+    local decor_before decor_after stamp
+    decor_before="$(grub_decor_count)"
+    stamp="$(date +%Y%m%d%H%M%S)"
+
+    info "Setting GRUB_DEFAULT to '$target' (only that line is changed)."
+    sudo cp /etc/default/grub "/etc/default/grub.bak.$stamp"
+    sudo cp /boot/grub/grub.cfg "/boot/grub/grub.cfg.bak.$stamp"
+
+    if sudo grep -qE '^[[:space:]]*GRUB_DEFAULT=' /etc/default/grub; then
         sudo sed -i "s|^[[:space:]]*GRUB_DEFAULT=.*|GRUB_DEFAULT='${target}'|" /etc/default/grub
     else
         printf "GRUB_DEFAULT='%s'\n" "$target" | sudo tee -a /etc/default/grub >/dev/null
     fi
 
-    # GRUB_DEFAULT is read at generation time, so regenerate once more.
-    sudo grub-mkconfig -o /boot/grub/grub.cfg >/dev/null 2>&1 \
-        || { fail "second grub-mkconfig failed"; return 1; }
-    ok "GRUB now boots $latest_base by default."
+    # GRUB_DEFAULT is only read when the menu is generated, so one regeneration
+    # is unavoidable. Everything else in /etc/default/grub is left as it was.
+    if ! sudo grub-mkconfig -o /boot/grub/grub.cfg >/dev/null 2>&1; then
+        fail "grub-mkconfig failed; restoring the previous grub.cfg."
+        sudo cp "/boot/grub/grub.cfg.bak.$stamp" /boot/grub/grub.cfg
+        sudo cp "/etc/default/grub.bak.$stamp" /etc/default/grub
+        return 1
+    fi
+
+    decor_after="$(grub_decor_count)"
+    if (( decor_before > 0 && decor_after == 0 )); then
+        fail "Regenerating grub.cfg dropped the background/theme; restoring the backup."
+        sudo cp "/boot/grub/grub.cfg.bak.$stamp" /boot/grub/grub.cfg
+        sudo cp "/etc/default/grub.bak.$stamp" /etc/default/grub
+        return 1
+    fi
+
+    ok "GRUB now boots $latest_base by default (background/theme preserved)."
 }
 
 setup_sdboot_default() {
@@ -400,7 +614,7 @@ setup_sdboot_default() {
 }
 
 setup_bootloader() {
-    step "2. Default boot kernel"
+    step "4. Default boot kernel"
 
     local count ver img pkgbase kver v i b k
     count="$(list_kernels | wc -l)"
@@ -431,13 +645,18 @@ setup_bootloader() {
 # ---------------------------------------------------- 3. base packages ------
 
 install_base_packages() {
-    step "3. Core packages (KDE, Plasma, Discover, Flatpak, portals)"
+    step "5. Core packages (KDE, Plasma, Discover, Flatpak, portals)"
     info "Installing ${#PKGS_BASE[@]} packages -- this takes a while."
     if pac_install "${PKGS_BASE[@]}"; then
         ok "Core packages installed."
     else
         fail "Some core packages failed to install."
     fi
+
+    # Photos (koko) is installed above in Gwenview's place.
+    pac_remove "${PKGS_REMOVE[@]}"
+
+    setup_login_manager
 
     # Flathub must exist before any of the flatpak steps below.
     if command -v flatpak >/dev/null; then
@@ -448,24 +667,56 @@ install_base_packages() {
     fi
 }
 
+# Make Plasma Login Manager the display manager. Only one unit can hold the
+# display-manager.service alias, so an existing one has to be disabled first.
+# If enabling fails the previous manager is put back, so the machine is never
+# left without a way to log in.
+setup_login_manager() {
+    if ! pacman -Qq plasma-login-manager >/dev/null 2>&1; then
+        fail "plasma-login-manager is not installed; leaving the display manager alone."
+        return 1
+    fi
+
+    local current=""
+    if [[ -e /etc/systemd/system/display-manager.service ]]; then
+        current="$(basename "$(readlink -f /etc/systemd/system/display-manager.service)")"
+    fi
+
+    if [[ "$current" == "plasmalogin.service" ]]; then
+        ok "Plasma Login Manager is already the display manager."
+        return 0
+    fi
+
+    if [[ -n "$current" ]]; then
+        info "Disabling the current display manager ($current)..."
+        sudo systemctl disable "$current" >/dev/null 2>&1 \
+            || warn "Could not disable $current; enabling may fail."
+    fi
+
+    # Deliberately not --now: switching the display manager mid-session would
+    # kill the running desktop. It takes effect on the next reboot.
+    if sudo systemctl enable plasmalogin.service >/dev/null 2>&1; then
+        ok "Plasma Login Manager enabled as the display manager."
+        info "Takes effect on the next reboot."
+    else
+        fail "Could not enable plasmalogin.service."
+        if [[ -n "$current" ]] && sudo systemctl enable "$current" >/dev/null 2>&1; then
+            warn "Put $current back so you still have a login screen."
+        fi
+    fi
+}
+
 # ------------------------------------------------ 4/5. browsers + Floorp ----
 
 install_browsers() {
-    step "4. Browsers (Flatpak)"
-    local i picks=() chosen=() n
-    echo
-    for i in "${!BROWSER_NAMES[@]}"; do
-        printf '      %d) %s\n' $((i+1)) "${BROWSER_NAMES[$i]}"
-    done
-    echo
-    info "Enter the numbers you want, space separated (e.g. \"1 3\"), or blank for none."
-    read -r -p "    Selection: " -a picks </dev/tty
+    step "6. Browsers (Flatpak)"
+    local chosen=() n id
 
-    for n in "${picks[@]}"; do
-        [[ "$n" =~ ^[0-9]+$ ]] || { warn "Ignoring '$n'."; continue; }
-        if (( n < 1 || n > ${#BROWSER_IDS[@]} )); then warn "Ignoring '$n'."; continue; fi
-        chosen+=( "${BROWSER_IDS[$((n-1))]}" )
-        [[ "${BROWSER_IDS[$((n-1))]}" == "one.ablaze.floorp" ]] && INSTALL_FLOORP=1
+    ask_multi "${BROWSER_NAMES[@]}"
+    for n in "${SELECTED[@]}"; do
+        id="${BROWSER_IDS[$((n - 1))]}"
+        chosen+=( "$id" )
+        [[ "$id" == "one.ablaze.floorp" ]] && INSTALL_FLOORP=1
     done
 
     if (( ${#chosen[@]} == 0 )); then
@@ -489,7 +740,7 @@ install_browsers() {
 # ------------------------------------------------------ 6. Thunderbird ------
 
 install_thunderbird() {
-    step "6. Thunderbird"
+    step "7. Thunderbird"
     if ask_yn "Install Thunderbird (Flatpak)?"; then
         if flatpak_install org.mozilla.Thunderbird; then
             INSTALL_THUNDERBIRD=1
@@ -568,7 +819,7 @@ deploy_userchrome() {
 }
 
 deploy_loose_files() {
-    step "7. Deploying the loose/ configuration files"
+    step "8. Deploying the loose/ configuration files"
     local cfg="$LOOSE/Application Configurations"
 
     # --- Floorp (Flatpak) ---
@@ -625,7 +876,7 @@ deploy_loose_files() {
 # ----------------------------------------------------------- 8. games -------
 
 install_games() {
-    step "8. KDE games"
+    step "9. KDE games"
     if ask_yn "Install the KDE games (${PKGS_GAMES[*]})?"; then
         if pac_install "${PKGS_GAMES[@]}"; then
             INSTALL_GAMES=1
@@ -641,7 +892,7 @@ install_games() {
 # ---------------------------------------------------------- 9. dolphin ------
 
 configure_dolphin() {
-    step "9. Dolphin settings"
+    step "10. Dolphin settings"
     local f="$HOME/.config/dolphinrc"
 
     kw "$f" DetailsMode IconSize 32
@@ -664,7 +915,7 @@ configure_dolphin() {
 # ------------------------------------------- light / dark mode + appearance --
 
 choose_theme_mode() {
-    step "Appearance: light or dark mode"
+    step "11. Light or dark mode"
     echo
     info "  1) Dark  -- Breeze Dark, dark icons, Willow Dark window decorations"
     info "  2) Light -- Breeze Light, light icons, Willow Light window decorations"
@@ -693,7 +944,7 @@ choose_theme_mode() {
 }
 
 apply_theme_mode() {
-    step "Applying the ${THEME_MODE} theme"
+    info "Applying the ${THEME_MODE} theme..."
 
     # -a applies appearance only; --resetLayout (which would wipe the panels)
     # is deliberately not passed.
@@ -717,12 +968,56 @@ apply_theme_mode() {
 
     kw "$HOME/.config/kdeglobals" Icons Theme "$ICON_THEME"
     ok "Icon theme set to $ICON_THEME."
+
+    apply_login_manager_theme
+}
+
+# The login greeter runs as its own system user and reads its own kdeglobals
+# rather than yours, which is why the login screen otherwise stays light when
+# you pick dark. Plasma Login keeps its home at /var/lib/plasmalogin.
+PLASMALOGIN_USER="plasmalogin"
+PLASMALOGIN_HOME="/var/lib/plasmalogin"
+
+apply_login_manager_theme() {
+    if ! id -u "$PLASMALOGIN_USER" >/dev/null 2>&1; then
+        warn "No '$PLASMALOGIN_USER' user -- Plasma Login Manager isn't installed."
+        warn "The login screen keeps its own theme. Install plasma-login-manager,"
+        warn "then re-run this script to theme it."
+        return 1
+    fi
+
+    if ! sudo install -d -o "$PLASMALOGIN_USER" -g "$PLASMALOGIN_USER" -m 0750 \
+            "$PLASMALOGIN_HOME/.config"; then
+        fail "Could not create $PLASMALOGIN_HOME/.config."
+        return 1
+    fi
+
+    # kwriteconfig6 would write into the greeter's home as root, so build the
+    # file here and hand it over with the right ownership instead.
+    local tmp="$WORKDIR/plasmalogin-kdeglobals"
+    cat > "$tmp" <<EOF
+[General]
+ColorScheme=$COLORSCHEME
+
+[Icons]
+Theme=$ICON_THEME
+
+[KDE]
+LookAndFeelPackage=$LOOKANDFEEL
+EOF
+
+    if sudo install -o "$PLASMALOGIN_USER" -g "$PLASMALOGIN_USER" -m 0644 \
+            "$tmp" "$PLASMALOGIN_HOME/.config/kdeglobals"; then
+        ok "Login screen set to $COLORSCHEME."
+    else
+        fail "Could not theme the login screen."
+    fi
 }
 
 # ---------------------------------------------------------- 10. cursor ------
 
 configure_cursor() {
-    step "10. Cursor theme (Breeze Light)"
+    step "12. Cursor theme (Breeze Light)"
     pac_install breeze-cursors >/dev/null 2>&1
 
     if [[ ! -d /usr/share/icons/Breeze_Light && ! -d "$HOME/.local/share/icons/Breeze_Light" ]]; then
@@ -747,7 +1042,7 @@ configure_cursor() {
 # ----------------------------------------------- 11. window decorations -----
 
 configure_decorations() {
-    step "11. Window decorations ($DECORATION_THEME)"
+    step "13. Window decorations ($DECORATION_THEME)"
     local theme_dir="$HOME/.local/share/aurorae/themes/$DECORATION_THEME"
 
     if [[ ! -d "$theme_dir" ]]; then
@@ -770,7 +1065,7 @@ configure_decorations() {
 # ---------------------------------------------------------- 12. printing ----
 
 setup_printing() {
-    step "12. Printing (CUPS)"
+    step "14. Printing (CUPS)"
     if pac_install "${PKGS_PRINT[@]}"; then
         ok "Print packages installed."
     else
@@ -797,7 +1092,7 @@ setup_printing() {
 # ------------------------------------------------------ 13. spellchecker ----
 
 setup_spellcheck() {
-    step "13. Spell checking (Sonnet + Hunspell)"
+    step "15. Spell checking (Sonnet + Hunspell)"
     if pac_install "${PKGS_SPELL[@]}"; then
         ok "Spell-check packages installed."
     else
@@ -822,7 +1117,7 @@ setup_spellcheck() {
 # ------------------------------------------------- 14. panels + systray -----
 
 configure_panels() {
-    step "14. Panels and system tray on every monitor"
+    step "16. Panels and system tray on every monitor"
 
     local qdbus_cmd=""
     for c in qdbus6 qdbus qdbus-qt6; do command -v "$c" >/dev/null && { qdbus_cmd="$c"; break; }; done
@@ -844,16 +1139,34 @@ configure_panels() {
     # device, say), so only build panels on screens at least this wide.
     local min_width="${PANEL_MIN_SCREEN_WIDTH:-1024}"
 
+    # A brand new Panel object is 30px, which is thinner than the panel Plasma
+    # itself creates. Reuse the height of whatever panel is already there so
+    # rebuilding doesn't silently shrink it; PANEL_HEIGHT overrides, and 30 is
+    # only the last resort when there is no existing panel to copy.
+    local forced_height="${PANEL_HEIGHT:-0}"
+
     local js
     js=$(cat <<JS_EOF
-var extraItems  = "${extra_items}";
-var hiddenItems = "${hidden_items}";
-var minWidth    = ${min_width};
+var extraItems   = "${extra_items}";
+var hiddenItems  = "${hidden_items}";
+var minWidth     = ${min_width};
+var forcedHeight = ${forced_height};
 
 var skipped = 0, built = 0;
 
-// Start from a clean slate so every screen ends up identical.
+// Note the current panel height BEFORE removing anything, so the rebuilt
+// panels keep it instead of dropping to the 30px new-Panel default.
+var inherited = 0;
 var existing = panelIds;
+for (var i = 0; i < existing.length; i++) {
+    var ep = panelById(existing[i]);
+    if (!inherited && ep.height > 0) inherited = ep.height;
+}
+
+var targetHeight = forcedHeight > 0 ? forcedHeight
+                 : (inherited > 0 ? inherited : 30);
+
+// Start from a clean slate so every screen ends up identical.
 for (var i = 0; i < existing.length; i++) {
     panelById(existing[i]).remove();
 }
@@ -865,7 +1178,7 @@ for (var s = 0; s < screenCount; s++) {
     panel.screen     = s;
     panel.location   = "bottom";
     panel.alignment  = "left";
-    // Panel height is deliberately left at the Plasma default.
+    panel.height     = targetHeight;
     panel.hiding     = "none";
     panel.floating   = true;
     panel.lengthMode = "fill";
@@ -906,7 +1219,7 @@ for (var s = 0; s < screenCount; s++) {
     built++;
 }
 
-print("built=" + built + " skipped=" + skipped);
+print("built=" + built + " skipped=" + skipped + " height=" + targetHeight);
 JS_EOF
 )
 
@@ -924,7 +1237,7 @@ JS_EOF
 # ------------------------------------------------------------ 15. wine ------
 
 install_wine() {
-    step "15. Wine"
+    step "17. Wine"
     # Wine needs the multilib repo for its 32-bit halves.
     if ! grep -qE '^\[multilib\]' /etc/pacman.conf; then
         warn "The [multilib] repository is not enabled in /etc/pacman.conf."
@@ -948,24 +1261,18 @@ install_wine() {
 # ------------------------------------------------------ 16. office suite ----
 
 install_office() {
-    step "16. Office suite"
-    echo
-    info "  1) LibreOffice      -- tried and true"
-    info "  2) Collabora Office -- newer, closer to the Microsoft Office look"
-    info "  3) Both"
-    info "  4) Neither"
-    echo
-    local choice picks=()
-    read -r -p "    Selection [4]: " choice </dev/tty
-    choice="${choice:-4}"
+    step "18. Office suite"
+    local picks=() n
 
-    case "$choice" in
-        1) picks=( org.libreoffice.LibreOffice ) ;;
-        2) picks=( com.collaboraoffice.Office ) ;;
-        3) picks=( org.libreoffice.LibreOffice com.collaboraoffice.Office ) ;;
-        4|"") info "Skipped."; return 0 ;;
-        *) warn "Unrecognized choice '$choice' -- skipping."; return 0 ;;
-    esac
+    ask_multi "${OFFICE_NAMES[@]}"
+    for n in "${SELECTED[@]}"; do
+        picks+=( "${OFFICE_IDS[$((n - 1))]}" )
+    done
+
+    if (( ${#picks[@]} == 0 )); then
+        info "No office suite selected."
+        return 0
+    fi
 
     if flatpak_install "${picks[@]}"; then
         ok "Installed: ${picks[*]}"
@@ -1003,23 +1310,25 @@ main() {
     preflight
     fetch_payload
 
-    setup_bluetooth        # 1
-    setup_bootloader       # 2
-    install_base_packages  # 3
-    install_browsers       # 4 + 5
-    install_thunderbird    # 6
-    deploy_loose_files     # 7
-    install_games          # 8
-    configure_dolphin      # 9
-    choose_theme_mode      # light or dark
-    apply_theme_mode
-    configure_cursor       # 10
-    configure_decorations  # 11
-    setup_printing         # 12
-    setup_spellcheck       # 13
-    configure_panels       # 14
-    install_wine           # 15
-    install_office         # 16
+    setup_chaotic_aur      # 1
+    system_update          # 2
+    setup_bluetooth        # 3
+    setup_bootloader       # 4
+    install_base_packages  # 5
+    install_browsers       # 6  (also grants Floorp access to $HOME)
+    install_thunderbird    # 7
+    deploy_loose_files     # 8
+    install_games          # 9
+    configure_dolphin      # 10
+    choose_theme_mode      # 11
+    apply_theme_mode       #     (continues step 11)
+    configure_cursor       # 12
+    configure_decorations  # 13
+    setup_printing         # 14
+    setup_spellcheck       # 15
+    configure_panels       # 16
+    install_wine           # 17
+    install_office         # 18
 
     summary
 }
