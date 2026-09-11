@@ -466,6 +466,7 @@ show_intro() {
 
   You will be asked about:
 
+    - Which kernel to boot, if more than one is installed
     - An AUR helper: yay, paru, or neither
     - Which browsers you want (Floorp, Firefox, Ungoogled Chromium, Brave)
     - Thunderbird
@@ -742,19 +743,6 @@ list_kernels() {
     done
 }
 
-# Highest-versioned kernel, via pacman's own version comparison.
-# Echoes the same four fields as list_kernels.
-latest_kernel() {
-    local best="" best_ver="" ver rest
-    while read -r ver rest; do
-        [[ -z "$ver" ]] && continue
-        if [[ -z "$best_ver" ]] || [[ "$(vercmp "$ver" "$best_ver")" -gt 0 ]]; then
-            best_ver="$ver"; best="$ver $rest"
-        fi
-    done < <(list_kernels)
-    printf '%s\n' "$best"
-}
-
 # Walk grub.cfg and emit "<positional path>|<id path>|<kernel image>" for every
 # entry, covering both the numeric form GRUB_DEFAULT accepts (0, 1>2) and the
 # more robust menuentry-id form.
@@ -816,8 +804,8 @@ grub_decor_count() {
 }
 
 setup_grub_default() {
-    local latest_img="$1" latest_base entry pos id kernel target="" current
-    latest_base="$(basename "$latest_img")"
+    local target_img="$1" target_base entry pos id kernel target="" current
+    target_base="$(basename "$target_img")"
 
     if [[ ! -r /boot/grub/grub.cfg ]] && ! sudo test -r /boot/grub/grub.cfg; then
         fail "/boot/grub/grub.cfg is not readable; leaving GRUB alone."
@@ -827,20 +815,20 @@ setup_grub_default() {
     # Nothing to do if the existing default already boots the newest kernel.
     # This is the common case on a system that is already set up correctly,
     # and it means the script does not touch GRUB at all.
-    if current="$(grub_current_kernel)" && [[ "$(basename "$current")" == "$latest_base" ]]; then
-        ok "GRUB already boots $latest_base by default; leaving it untouched."
+    if current="$(grub_current_kernel)" && [[ "$(basename "$current")" == "$target_base" ]]; then
+        ok "GRUB already boots $target_base by default; leaving it untouched."
         return 0
     fi
 
     # Read the menu as it stands -- no pre-emptive regeneration.
     while IFS='|' read -r pos id kernel; do
-        [[ "$(basename "$kernel")" == "$latest_base" ]] || continue
+        [[ "$(basename "$kernel")" == "$target_base" ]] || continue
         if [[ "$id" != *">"* ]]; then target="$id"; break; fi
         [[ -z "$target" ]] && target="$id"
     done < <(grub_entry_map)
 
     if [[ -z "$target" ]]; then
-        fail "No GRUB entry for $latest_base in the current menu; leaving GRUB alone."
+        fail "No GRUB entry for $target_base in the current menu; leaving GRUB alone."
         return 1
     fi
 
@@ -875,13 +863,13 @@ setup_grub_default() {
         return 1
     fi
 
-    ok "GRUB now boots $latest_base by default (background/theme preserved)."
+    ok "GRUB now boots $target_base by default (background/theme preserved)."
 }
 
 setup_sdboot_default() {
-    local latest_img="$1" latest_pkgbase="$2" latest_kver="$3"
-    local latest_base esp entry line best=""
-    latest_base="$(basename "$latest_img")"
+    local target_img="$1" target_pkgbase="$2" target_kver="$3"
+    local target_base esp entry line best=""
+    target_base="$(basename "$target_img")"
     esp="$(bootctl --print-esp-path 2>/dev/null)" || esp="/boot"
     [[ -d "$esp/loader/entries" ]] || esp="/boot"
 
@@ -894,8 +882,8 @@ setup_sdboot_default() {
         [[ -f "$entry" ]] || continue
         line="$(sudo grep -E '^[[:space:]]*linux[[:space:]]' "$entry" 2>/dev/null)"
         [[ -n "$line" ]] || continue
-        if [[ "$line" == *"$latest_base"* || "$line" == *"/$latest_pkgbase"* \
-              || "$line" == *"$latest_kver"* ]]; then
+        if [[ "$line" == *"$target_base"* || "$line" == *"/$target_pkgbase"* \
+              || "$line" == *"$target_kver"* ]]; then
             best="$(basename "$entry")"
             # Prefer a normal entry over a fallback one.
             [[ "$best" == *fallback* ]] || break
@@ -903,7 +891,7 @@ setup_sdboot_default() {
     done
 
     if [[ -z "$best" ]]; then
-        fail "No systemd-boot entry references $latest_base; leaving loader.conf alone."
+        fail "No systemd-boot entry references $target_base; leaving loader.conf alone."
         return 1
     fi
 
@@ -919,27 +907,71 @@ setup_sdboot_default() {
 setup_bootloader() {
     step "5. Default boot kernel"
 
-    local count ver img pkgbase kver v i b k
-    count="$(list_kernels | wc -l)"
+    local vers=() imgs=() bases=() kvers=() v i b k
+    while read -r v i b k; do
+        vers+=( "$v" ); imgs+=( "$i" ); bases+=( "$b" ); kvers+=( "$k" )
+    done < <(list_kernels)
+
+    local count=${#vers[@]}
     if (( count < 2 )); then
         info "Only $count kernel installed -- nothing to choose between. Skipping."
         return 0
     fi
 
-    info "Kernels found:"
-    while read -r v i b k; do info "  $b  ($v)"; done < <(list_kernels)
+    # Mark the newest so the choice is obvious; pacman decides what "newest" is.
+    local newest=0 n
+    for (( n = 1; n < count; n++ )); do
+        [[ "$(vercmp "${vers[$n]}" "${vers[$newest]}")" -gt 0 ]] && newest=$n
+    done
 
-    read -r ver img pkgbase kver < <(latest_kernel)
-    if [[ -z "${img:-}" ]]; then
-        fail "Could not determine the newest kernel."
-        return 1
+    echo
+    info "More than one kernel is installed:"
+    echo
+    local width=0
+    for (( n = 0; n < count; n++ )); do
+        (( ${#bases[$n]} > width )) && width=${#bases[$n]}
+    done
+    for (( n = 0; n < count; n++ )); do
+        printf '      %d) %-*s  %s%s\n' "$((n + 1))" "$width" "${bases[$n]}" \
+            "${vers[$n]}" "$( (( n == newest )) && printf '   (newest)' )"
+    done
+    echo
+    info "Accepts a number, a kernel name, \"latest\" or \"lts\"."
+
+    local choice pick=$newest
+    read -r -p "    Which should the bootloader start by default? [$((newest + 1))] " \
+        choice </dev/tty
+    choice="${choice//[[:space:]]/}"
+
+    if [[ -n "$choice" ]]; then
+        local resolved=-1
+        if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= count )); then
+            resolved=$(( choice - 1 ))
+        elif [[ "${choice,,}" == "latest" || "${choice,,}" == "newest" ]]; then
+            resolved=$newest
+        else
+            for (( n = 0; n < count; n++ )); do
+                # "lts" matches linux-lts, "zen" matches linux-zen, and so on.
+                if [[ "${bases[$n],,}" == "${choice,,}" \
+                   || "${bases[$n],,}" == "linux-${choice,,}" ]]; then
+                    resolved=$n; break
+                fi
+            done
+        fi
+
+        if (( resolved < 0 )); then
+            warn "Unrecognized choice '$choice' -- using the newest kernel."
+        else
+            pick=$resolved
+        fi
     fi
-    info "Newest: $pkgbase ($ver)"
+
+    info "Default boot kernel: ${bases[$pick]} (${vers[$pick]})"
 
     if [[ -d /boot/grub ]] && command -v grub-mkconfig >/dev/null; then
-        setup_grub_default "$img"
+        setup_grub_default "${imgs[$pick]}"
     elif command -v bootctl >/dev/null && bootctl is-installed >/dev/null 2>&1; then
-        setup_sdboot_default "$img" "$pkgbase" "$kver"
+        setup_sdboot_default "${imgs[$pick]}" "${bases[$pick]}" "${kvers[$pick]}"
     else
         warn "Neither GRUB nor systemd-boot detected. Skipping."
     fi
@@ -1055,7 +1087,7 @@ install_browsers() {
 install_thunderbird() {
     step "8. Thunderbird"
     if ask_yn "Install Thunderbird (Flatpak)?"; then
-        if flatpak_install org.mozilla.Thunderbird; then
+        if flatpak_install org.mozilla.thunderbird; then
             INSTALL_THUNDERBIRD=1
             ok "Thunderbird installed."
         else
@@ -1148,10 +1180,10 @@ deploy_loose_files() {
             "$HOME/.mozilla/firefox"
     fi
 
-    # --- Thunderbird (the Flatpak id has been spelled both ways over time) ---
+    # --- Thunderbird ---
     local tb_root="" r
-    for r in "$HOME/.var/app/org.mozilla.Thunderbird/.thunderbird" \
-             "$HOME/.var/app/org.mozilla.thunderbird/.thunderbird" \
+    for r in "$HOME/.var/app/org.mozilla.thunderbird/.thunderbird" \
+             "$HOME/.var/app/org.mozilla.Thunderbird/.thunderbird" \
              "$HOME/.thunderbird"; do
         [[ -d "$r" ]] && { tb_root="$r"; break; }
     done

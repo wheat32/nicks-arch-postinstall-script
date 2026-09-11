@@ -64,7 +64,7 @@ infers the variant from the look-and-feel already in use instead.
 | 2 | Runs a full `pacman -Syu` |
 | 3 | Offers to install an AUR helper (yay or paru), unless one is already there |
 | 4 | Installs `bluez`/`bluez-utils`, enables and starts `bluetooth.service` |
-| 5 | If more than one kernel is installed, points GRUB (or systemd-boot) at the newest one |
+| 5 | If more than one kernel is installed, asks which one the bootloader should start by default |
 | 6 | Installs the KDE/Plasma package set, Discover, Flatpak and the XDG portals; adds Flathub; removes superseded packages; makes Plasma Login Manager the display manager |
 | 7 | Asks which browsers you want (Floorp / Firefox / Ungoogled Chromium / Brave), installs them as Flatpaks, and grants Floorp read/write access to `$HOME` |
 | 8 | Asks whether to install Thunderbird |
@@ -87,10 +87,14 @@ idempotent.
 
 ## Notes
 
+- **Step 5 asks which kernel to boot** when more than one is installed —
+  latest, LTS, or anything else present (zen, hardened). It takes a number, a
+  kernel name, `latest` or `lts`, and defaults to the newest on a bare Enter.
+  With only one kernel installed the step is skipped entirely.
 - **Step 5 touches GRUB as little as possible.** It first reads the existing
   menu and works out which kernel the current `GRUB_DEFAULT` actually boots —
   numeric (`0`), nested numeric (`1>2`), menuentry-id and `saved` forms are all
-  understood. If that is already the newest kernel, it changes nothing at all
+  understood. If that is already the kernel you picked, it changes nothing at all
   and does not regenerate anything. Otherwise it rewrites only the
   `GRUB_DEFAULT` line and regenerates once with
   `grub-mkconfig -o /boot/grub/grub.cfg` (the Arch equivalent of
