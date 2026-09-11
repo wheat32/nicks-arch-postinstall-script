@@ -6,6 +6,12 @@ Post-install setup for a fresh Arch Linux + KDE Plasma machine.
 
 **Last confirmed working: 2026-09-11** — Arch Linux, KDE Plasma 6.7.5
 
+**Tested on:** vanilla Arch Linux and EndeavourOS only. Other Arch derivatives
+(Manjaro, Garuda, CachyOS and the like) ship their own repositories, defaults
+and display manager choices, so parts of this may not behave as described
+there. Non-Arch distributions are not supported at all — the script is built
+around `pacman`.
+
 ## Running it
 
 Run as your **normal user** (it calls `sudo` itself):
