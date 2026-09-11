@@ -36,6 +36,27 @@ err()   { printf '    %s%s%s\n' "$C_RED" "$*" "$C_RESET" >&2; }
 
 fail() { err "$*"; FAILURES+=("$*"); }
 
+# Post a desktop notification, if there is a desktop to post it to. Silently
+# does nothing over SSH or from a bare TTY.
+notify_desktop() {
+    local title="$1" body="$2"
+
+    [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]] || return 1
+    [[ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]] || return 1
+
+    if command -v notify-send >/dev/null 2>&1 \
+       && notify-send --app-name="Arch post-install" --icon=system-reboot \
+                      --urgency=normal "$title" "$body" >/dev/null 2>&1; then
+        return 0
+    fi
+    # kdialog is guaranteed by the package list; notify-send is not.
+    if command -v kdialog >/dev/null 2>&1 \
+       && kdialog --title "$title" --passivepopup "$body" 20 >/dev/null 2>&1; then
+        return 0
+    fi
+    return 1
+}
+
 cleanup() { [[ -n "$WORKDIR" && -d "$WORKDIR" ]] && rm -rf "$WORKDIR"; }
 trap cleanup EXIT
 
@@ -93,6 +114,7 @@ PKGS_BASE=(
     # --- KDE applications / utilities ---
     ark dolphin dolphin-plugins filelight koko isoimagewriter kate kcalc
     kcharselect kclock kcron kdf kdialog kjournald kolourpaint konsole kup ksystemlog
+    libnotify
     ktorrent kwalletmanager kweather okular partitionmanager sweeper
     kamera kamoso kdeconnect kdegraphics-mobipocket kdegraphics-thumbnailers
     kdenetwork-filesharing kio-admin kio-extras krdc ffmpegthumbs
@@ -1636,9 +1658,22 @@ summary() {
         info "This was a partial run (${#RUN_STEPS[@]} of ${#STEPS[@]} steps)."
         info "Run without --only/--skip to do everything."
     fi
+
+    local body
+    if (( ${#FAILURES[@]} )); then
+        body="Finished with ${#FAILURES[@]} problem(s) -- check the terminal. Reboot when you have looked them over."
+    else
+        body="All ${#RUN_STEPS[@]} steps completed. Reboot to finish applying the changes."
+    fi
+
     echo
-    info "Log out and back in (or reboot) so the cursor, window decorations,"
-    info "and panel changes take full effect."
+    printf '%s  Reboot to finish applying the changes.%s\n' "$C_BOLD$C_GREEN" "$C_RESET"
+    info "The cursor, window decorations, panels and login screen all settle"
+    info "on the next boot. A log out and back in covers most of it, but the"
+    info "display manager change needs a full reboot."
+
+    notify_desktop "Post-install setup finished" "$body" \
+        || info "(No desktop session to notify -- terminal only.)"
 }
 
 # --------------------------------------------- 21. application menu ---------

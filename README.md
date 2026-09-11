@@ -173,4 +173,10 @@ idempotent.
   associations — it just leaves the menu. Entries that aren't installed are
   counted and skipped. To bring one back, delete its file from
   `~/.local/share/applications`. Edit `MENU_HIDE` to change the list.
+- **It finishes with a reboot reminder**, in the terminal and as a desktop
+  notification. The notification goes through `notify-send` (from `libnotify`,
+  which is in the package list for exactly this) and falls back to
+  `kdialog --passivepopup` if that is missing. It reports the failure count when
+  something went wrong, and is skipped silently when there is no graphical
+  session — over SSH or from a bare TTY — rather than erroring.
 - `cups-browsed` is installed but left disabled, matching the reference system.
