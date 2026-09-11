@@ -25,6 +25,31 @@ standalone — a local copy of those files is never assumed.
 
 Set `REPO_BRANCH=somebranch` to pull the payload from a different branch.
 
+### Running only part of it
+
+Every step runs by default. To run a subset:
+
+```bash
+bash postinstall.sh --only theme      # just the light/dark mode step
+bash postinstall.sh --only 13         # the same step, by number
+bash postinstall.sh --only 13-15      # light/dark, cursor and decorations
+bash postinstall.sh --skip games,wine # everything except those two
+bash postinstall.sh --list            # show the step list and exit
+bash postinstall.sh --help            # full usage
+```
+
+`--only` and `--skip` take comma-separated numbers, names or ranges, and cannot
+be combined. Steps always run in script order no matter how you type them, and
+an unknown step is an error rather than a silent no-op.
+
+A partial run only asks for `sudo` if a selected step actually needs it — so
+`--only panels` or `--only dolphin,imageviewer` runs without a password prompt —
+and only downloads the `loose/` payload if step 9 is selected.
+
+Steps are mostly independent, with one link worth knowing: step 15 (window
+decorations) follows the light/dark choice from step 13. Run on its own, it
+infers the variant from the look-and-feel already in use instead.
+
 ## What it does
 
 | # | Step |
@@ -49,6 +74,7 @@ Set `REPO_BRANCH=somebranch` to pull the payload from a different branch.
 | 18 | Rebuilds an identical panel + system tray on every monitor at least 1024px wide |
 | 19 | Installs Wine (offering to enable `[multilib]` first) |
 | 20 | Asks which office suites you want (LibreOffice / Collabora Office), same numbered selection as the browsers |
+| 21 | Offers to hide developer/diagnostic entries from the application menu |
 
 It is safe to re-run: package installs use `--needed` and config writes are
 idempotent.
@@ -138,4 +164,13 @@ idempotent.
   `~/.config/mimeapps.list` — which is what makes System Settings read
   "Photos". The other image types Photos handles are set as defaults too, so
   every image actually opens in it. Video types it also claims are left alone.
+- **Application menu cleanup (step 21)** is opt-in. It hides these entries:
+  Icon Browser, Meld, Qt Assistant, Qt D-Bus Viewer, Qt Linguist, Qt Widgets
+  Designer, Qt V4L2 test Utility, Qt V4L2 video capture utility, UXTerm, XTerm
+  and YAD settings. Hiding copies the original `.desktop` file into
+  `~/.local/share/applications` and sets `NoDisplay=true`, so the program stays
+  installed and still works from a terminal, from "Open with" and for file
+  associations — it just leaves the menu. Entries that aren't installed are
+  counted and skipped. To bring one back, delete its file from
+  `~/.local/share/applications`. Edit `MENU_HIDE` to change the list.
 - `cups-browsed` is installed but left disabled, matching the reference system.

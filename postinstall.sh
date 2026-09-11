@@ -32,7 +32,7 @@ step()  { printf '\n%s==> %s%s\n' "$C_BOLD$C_BLUE" "$*" "$C_RESET"; }
 info()  { printf '    %s\n' "$*"; }
 ok()    { printf '    %s%s%s\n' "$C_GREEN" "$*" "$C_RESET"; }
 warn()  { printf '    %s%s%s\n' "$C_YELLOW" "$*" "$C_RESET"; }
-err()   { printf '    %s%s%s\n' "$C_RED" "$*" "$C_RESET"; }
+err()   { printf '    %s%s%s\n' "$C_RED" "$*" "$C_RESET" >&2; }
 
 fail() { err "$*"; FAILURES+=("$*"); }
 
@@ -121,10 +121,16 @@ PKGS_BASE=(
 
 PKGS_GAMES=( kbreakout kmahjongg kmines kpat ksudoku libkdegames )
 
-# Superseded packages. Photos (package name "koko") is proposed as Gwenview's
-# replacement as of KDE Gear 26.08, so install that instead and take Gwenview
-# back off the system if an earlier install left it there.
-PKGS_REMOVE=( gwenview )
+# Packages to take back off the system if an installer or an earlier setup left
+# them behind. Nothing here is ever installed by this script.
+#
+#   gwenview    -- superseded by Photos (package "koko"), which is proposed as
+#                  its replacement as of KDE Gear 26.08.
+#   pavucontrol -- a standalone GTK mixer some installers add by name (the
+#                  EndeavourOS one does). Unrelated to plasma-pa, which is what
+#                  actually provides the tray volume applet, the Sound page in
+#                  System Settings and the volume media keys.
+PKGS_REMOVE=( gwenview pavucontrol )
 
 PKGS_PRINT=(
     cups cups-browsed cups-filters cups-pdf
@@ -141,6 +147,25 @@ PKGS_WINE=( wine wine-mono winetricks )
 # AUR helpers offered in step 3. Both are in Chaotic-AUR, so they install with
 # plain pacman once step 1 has run; only one (or neither) may be chosen.
 AUR_HELPERS=( yay paru )
+
+# Developer/diagnostic entries that clutter the application menu. Hiding one
+# sets NoDisplay=true in a copy under ~/.local/share/applications, so the
+# program stays installed and still works from a terminal, from "Open with",
+# and for file associations -- it just stops appearing in the menu. Reversible
+# by deleting the override file.
+MENU_HIDE=(
+    "yad-icon-browser.desktop|Icon Browser"
+    "org.gnome.Meld.desktop|Meld"
+    "assistant.desktop|Qt Assistant"
+    "qdbusviewer.desktop|Qt D-Bus Viewer"
+    "linguist.desktop|Qt Linguist"
+    "designer.desktop|Qt Widgets Designer"
+    "qv4l2.desktop|Qt V4L2 test Utility"
+    "qvidcap.desktop|Qt V4L2 video capture utility"
+    "uxterm.desktop|UXTerm"
+    "xterm.desktop|XTerm"
+    "yad-settings.desktop|YAD settings"
+)
 
 # Photos' desktop file. The Default Applications KCM keys its "Image viewer"
 # dropdown off image/png alone, so that entry is what makes System Settings
@@ -170,6 +195,41 @@ OFFICE_NAMES=(
     "Collabora Office -- newer, closer to the Microsoft Office look"
 )
 
+# The one place the step list is defined: number | function | label | name |
+# needs-root. Everything else -- the intro screen, --list, --only/--skip and
+# the dispatch loop -- is generated from this, so there is no second list to
+# keep in sync.
+STEPS=(
+    "1|setup_chaotic_aur|Chaotic-AUR repository|chaotic|1"
+    "2|system_update|System update|update|1"
+    "3|install_aur_helper|AUR helper (yay/paru)|aur|1"
+    "4|setup_bluetooth|Bluetooth|bluetooth|1"
+    "5|setup_bootloader|Default boot kernel|boot|1"
+    "6|install_base_packages|Core packages and login manager|packages|1"
+    "7|install_browsers|Browsers|browsers|1"
+    "8|install_thunderbird|Thunderbird|thunderbird|1"
+    "9|deploy_loose_files|Deploy the loose/ config files|files|0"
+    "10|install_games|KDE games|games|1"
+    "11|configure_dolphin|Dolphin settings|dolphin|0"
+    "12|configure_default_image_viewer|Default image viewer (Photos)|imageviewer|0"
+    "13|run_theme_mode|Light or dark mode|theme|1"
+    "14|configure_cursor|Cursor theme|cursor|1"
+    "15|configure_decorations|Window decorations|decorations|0"
+    "16|setup_printing|Printing (CUPS)|printing|1"
+    "17|setup_spellcheck|Spell checking|spellcheck|1"
+    "18|configure_panels|Panels and system tray|panels|0"
+    "19|install_wine|Wine|wine|1"
+    "20|install_office|Office suite|office|1"
+    "21|tidy_application_menu|Application menu cleanup|menu|0"
+)
+
+# Steps chosen for this run, as numbers. Filled in by parse_args.
+RUN_STEPS=()
+
+step_field() { local e; for e in "${STEPS[@]}"; do [[ "${e%%|*}" == "$1" ]] && { IFS='|' read -r _n _f _l _s _r <<< "$e"; case "$2" in fn) printf '%s\n' "$_f";; label) printf '%s\n' "$_l";; name) printf '%s\n' "$_s";; root) printf '%s\n' "$_r";; esac; return 0; }; done; return 1; }
+
+step_selected() { local n; for n in "${RUN_STEPS[@]}"; do [[ "$n" == "$1" ]] && return 0; done; return 1; }
+
 # Populated as the run goes, so later steps know what actually got installed.
 INSTALL_FLOORP=0
 INSTALL_THUNDERBIRD=0
@@ -177,6 +237,7 @@ INSTALL_GAMES=0
 
 # Set by choose_theme_mode(); everything appearance-related keys off these.
 THEME_MODE="dark"
+THEME_CHOSEN=0
 LOOKANDFEEL="org.kde.breezedark.desktop"
 COLORSCHEME="BreezeDark"
 ICON_THEME="breeze-dark"
@@ -212,44 +273,188 @@ flatpak_install() {
     sudo flatpak install -y --system --noninteractive flathub "$@"
 }
 
+# ------------------------------------------------------ argument parsing ----
+
+usage() {
+    cat <<'USAGE'
+Usage: postinstall.sh [options]
+
+Runs every step by default. To run only part of it:
+
+  --only  <steps>   run just these steps, in script order
+  --skip  <steps>   run everything except these
+  --list            show the step list and exit
+  -h, --help        show this help and exit
+
+<steps> is a comma-separated list of numbers, names, or ranges:
+
+  --only 13             just the light/dark mode step
+  --only theme          the same step, by name
+  --only 13,14,15       light/dark, cursor and decorations
+  --only 13-15          the same, as a range
+  --skip 1,2            everything except the repository and the full upgrade
+  --skip games,wine     everything except those two
+
+Environment overrides:
+
+  REPO_BRANCH=<branch>        pull the loose/ payload from another branch
+  PANEL_HEIGHT=<px>           force a panel height instead of inheriting it
+  PANEL_MIN_SCREEN_WIDTH=<px> lower bound for giving a screen a panel
+
+USAGE
+}
+
+list_steps() {
+    local e n f l nm r
+    printf '\n  %-4s %-14s %s\n' "#" "NAME" "STEP"
+    printf '  %-4s %-14s %s\n' "---" "-------------" "--------------------------------"
+    for e in "${STEPS[@]}"; do
+        IFS='|' read -r n f l nm r <<< "$e"
+        printf '  %-4s %-14s %s\n' "$n" "$nm" "$l"
+    done
+    echo
+}
+
+# Expand "13", "theme", "5-9" (and comma-separated mixes) into step numbers.
+# Echoes the numbers, one per line; returns 1 on anything unrecognized.
+expand_step_spec() {
+    local spec="$1" token lo hi n e num name rc=0
+    IFS=',' read -ra _tokens <<< "$spec"
+    for token in "${_tokens[@]}"; do
+        token="${token//[[:space:]]/}"
+        [[ -z "$token" ]] && continue
+
+        if [[ "$token" =~ ^([0-9]+)-([0-9]+)$ ]]; then
+            lo="${BASH_REMATCH[1]}"; hi="${BASH_REMATCH[2]}"
+            (( lo > hi )) && { n=$lo; lo=$hi; hi=$n; }
+            for (( n = lo; n <= hi; n++ )); do
+                step_field "$n" fn >/dev/null && printf '%s\n' "$n"
+            done
+            continue
+        fi
+
+        if [[ "$token" =~ ^[0-9]+$ ]]; then
+            if step_field "$token" fn >/dev/null; then
+                printf '%s\n' "$token"
+            else
+                err "No such step: $token"; rc=1
+            fi
+            continue
+        fi
+
+        # Otherwise treat it as a name.
+        local matched=0
+        for e in "${STEPS[@]}"; do
+            IFS='|' read -r num _ _ name _ <<< "$e"
+            if [[ "${token,,}" == "${name,,}" ]]; then
+                printf '%s\n' "$num"; matched=1; break
+            fi
+        done
+        (( matched )) || { err "No such step: $token"; rc=1; }
+    done
+    return $rc
+}
+
+parse_args() {
+    local only_spec="" skip_spec="" arg
+    while (( $# )); do
+        arg="$1"
+        case "$arg" in
+            -h|--help)  usage; exit 0 ;;
+            --list)     list_steps; exit 0 ;;
+            --only)     only_spec="${2:-}"; shift 2 || true ;;
+            --only=*)   only_spec="${arg#*=}"; shift ;;
+            --skip)     skip_spec="${2:-}"; shift 2 || true ;;
+            --skip=*)   skip_spec="${arg#*=}"; shift ;;
+            *)          err "Unknown option: $arg"; echo; usage; exit 1 ;;
+        esac
+    done
+
+    if [[ -n "$only_spec" && -n "$skip_spec" ]]; then
+        err "--only and --skip cannot be combined."
+        exit 1
+    fi
+
+    local e n
+    RUN_STEPS=()
+
+    if [[ -n "$only_spec" ]]; then
+        local wanted=() expanded="" w
+        expanded="$(expand_step_spec "$only_spec")" || exit 1
+        while read -r w; do
+            [[ "$w" =~ ^[0-9]+$ ]] && wanted+=( "$w" )
+        done <<< "$expanded"
+        (( ${#wanted[@]} )) || { err "--only matched no steps."; exit 1; }
+        # Keep script order regardless of how they were typed.
+        for e in "${STEPS[@]}"; do
+            n="${e%%|*}"
+            for w in "${wanted[@]}"; do
+                [[ "$n" == "$w" ]] && { RUN_STEPS+=( "$n" ); break; }
+            done
+        done
+    elif [[ -n "$skip_spec" ]]; then
+        local dropped=() expanded="" w
+        expanded="$(expand_step_spec "$skip_spec")" || exit 1
+        while read -r w; do
+            [[ "$w" =~ ^[0-9]+$ ]] && dropped+=( "$w" )
+        done <<< "$expanded"
+        for e in "${STEPS[@]}"; do
+            n="${e%%|*}"
+            local drop=0 d
+            for d in "${dropped[@]}"; do [[ "$n" == "$d" ]] && drop=1; done
+            (( drop )) || RUN_STEPS+=( "$n" )
+        done
+        (( ${#RUN_STEPS[@]} )) || { err "--skip left nothing to run."; exit 1; }
+    else
+        for e in "${STEPS[@]}"; do RUN_STEPS+=( "${e%%|*}" ); done
+    fi
+}
+
+# Does anything in this run need root?
+run_needs_root() {
+    local n
+    for n in "${RUN_STEPS[@]}"; do
+        [[ "$(step_field "$n" root)" == "1" ]] && return 0
+    done
+    return 1
+}
+
 # --------------------------------------------------------------- intro ------
 
 show_intro() {
+    local partial=0
+    (( ${#RUN_STEPS[@]} == ${#STEPS[@]} )) || partial=1
+
     printf '\n%sArch Linux post-install setup%s\n' "$C_BOLD$C_BLUE" "$C_RESET"
     printf '%s\n' "-------------------------------------------------------------"
-    cat <<'INTRO'
 
-  This sets up a fresh Arch Linux + KDE Plasma install. It will:
+    if (( partial )); then
+        printf '\n  Partial run -- only these steps will run:\n\n'
+    else
+        printf '\n  This sets up a fresh Arch Linux + KDE Plasma install. It will:\n\n'
+    fi
 
-     1.  Add the Chaotic-AUR repository
-     2.  Fully update the system
-     3.  Install an AUR helper, if you want one
-     4.  Enable and start Bluetooth
-     5.  Point the bootloader at the newest installed kernel
-     6.  Install the KDE/Plasma packages, Discover, Flatpak and XDG portals
-     7.  Install the browsers you pick, as Flatpaks
-     8.  Install Thunderbird, if you want it
-     9.  Drop the userChrome.css files and window decorations into place
-    10.  Install the KDE games, if you want them
-    11.  Apply your Dolphin settings
-    12.  Make Photos the default image viewer
-    13.  Apply light or dark mode
-    14.  Set the Breeze Light cursor
-    15.  Apply the Willow window decorations
-    16.  Install and enable printing (CUPS, foomatic, gutenprint)
-    17.  Install Hunspell and configure spell checking for en_US
-    18.  Rebuild a matching panel and system tray on every monitor
-    19.  Install Wine
-    20.  Install an office suite, if you want one
+    local n
+    for n in "${RUN_STEPS[@]}"; do
+        printf '    %3s.  %s\n' "$n" "$(step_field "$n" label)"
+    done
+
+    if (( ! partial )); then
+        cat <<'INTRO'
 
   You will be asked about:
 
+    - An AUR helper: yay, paru, or neither
     - Which browsers you want (Floorp, Firefox, Ungoogled Chromium, Brave)
     - Thunderbird
     - The KDE games
     - Light or dark mode
-    - An AUR helper: yay, paru, or neither
     - Which office suites you want (LibreOffice, Collabora Office)
+    - Whether to hide developer/diagnostic entries from the app menu
+INTRO
+    fi
+
+    cat <<'INTRO'
 
   Worth knowing before you start:
 
@@ -259,13 +464,12 @@ show_intro() {
       existing one; this takes effect on the next reboot
     - It then runs a full system upgrade (pacman -Syu)
     - It asks for your sudo password up front, and keeps it alive
-    - /etc/pacman.conf is backed up before it is edited
-    - /etc/default/grub is backed up before it is edited
+    - /etc/pacman.conf and /etc/default/grub are backed up before editing
     - Your Plasma panels are deleted and rebuilt, which resets pinned
       launchers back to the defaults
     - Configuration files are downloaded from GitHub, not read from disk
 
-  Nothing has been changed yet.
+  Only the steps listed above will run. Nothing has been changed yet.
 
 INTRO
 
@@ -303,10 +507,14 @@ preflight() {
         exit 1
     fi
 
-    info "Caching sudo credentials..."
-    sudo -v || { err "sudo failed."; exit 1; }
-    # Keep sudo alive for the whole run.
-    while true; do sudo -n true; sleep 50; kill -0 "$$" 2>/dev/null || exit; done 2>/dev/null &
+    if run_needs_root; then
+        info "Caching sudo credentials..."
+        sudo -v || { err "sudo failed."; exit 1; }
+        # Keep sudo alive for the whole run.
+        while true; do sudo -n true; sleep 50; kill -0 "$$" 2>/dev/null || exit; done 2>/dev/null &
+    else
+        info "No selected step needs root; not asking for sudo."
+    fi
 
     ok "Ready."
 }
@@ -476,7 +684,7 @@ install_aur_helper() {
     fi
 }
 
-# ------------------------------------------------------- 1. bluetooth -------
+# -------------------------------------------------- 4. bluetooth ------------
 
 setup_bluetooth() {
     step "4. Bluetooth"
@@ -488,7 +696,7 @@ setup_bluetooth() {
     fi
 }
 
-# ------------------------------------------------- 2. bootloader default ----
+# ----------------------------------------- 5. bootloader default ------------
 
 # Print "<pkgver> <image-path> <pkgbase> <kernel-release>" for each installed
 # kernel. /boot/vmlinuz-* is copied into place by a hook and is not owned by any
@@ -715,7 +923,7 @@ setup_bootloader() {
     fi
 }
 
-# ---------------------------------------------------- 3. base packages ------
+# ---------------------------------------------- 6. base packages ------------
 
 install_base_packages() {
     step "6. Core packages (KDE, Plasma, Discover, Flatpak, portals)"
@@ -726,7 +934,6 @@ install_base_packages() {
         fail "Some core packages failed to install."
     fi
 
-    # Photos (koko) is installed above in Gwenview's place.
     pac_remove "${PKGS_REMOVE[@]}"
 
     setup_login_manager
@@ -821,7 +1028,7 @@ install_browsers() {
     fi
 }
 
-# ------------------------------------------------------ 6. Thunderbird ------
+# ------------------------------------------------ 8. Thunderbird ------------
 
 install_thunderbird() {
     step "8. Thunderbird"
@@ -837,7 +1044,7 @@ install_thunderbird() {
     fi
 }
 
-# ------------------------------------------- 7. deploy loose/ config files ---
+# --------------------------------- 9. deploy loose/ config files ------------
 
 # Echo the default profile directory under a Firefox-family root, creating
 # nothing. Prefers the install's default-release profile, then Default=1.
@@ -957,7 +1164,7 @@ deploy_loose_files() {
     fi
 }
 
-# ----------------------------------------------------------- 8. games -------
+# ----------------------------------------------------- 10. games ------------
 
 install_games() {
     step "10. KDE games"
@@ -973,7 +1180,7 @@ install_games() {
     fi
 }
 
-# ---------------------------------------------------------- 9. dolphin ------
+# --------------------------------------------------- 11. dolphin ------------
 
 configure_dolphin() {
     step "11. Dolphin settings"
@@ -1048,7 +1255,14 @@ choose_theme_mode() {
             DECORATION_THEME="WillowDark"
             ;;
     esac
+    THEME_CHOSEN=1
     ok "Using ${THEME_MODE} mode."
+}
+
+# Step 13 is the prompt plus the apply, as one unit.
+run_theme_mode() {
+    choose_theme_mode
+    apply_theme_mode
 }
 
 apply_theme_mode() {
@@ -1122,7 +1336,7 @@ EOF
     fi
 }
 
-# ---------------------------------------------------------- 10. cursor ------
+# ---------------------------------------------------- 14. cursor ------------
 
 configure_cursor() {
     step "14. Cursor theme (Breeze Light)"
@@ -1147,9 +1361,21 @@ configure_cursor() {
     fi
 }
 
-# ----------------------------------------------- 11. window decorations -----
+# ---------------------------------------- 15. window decorations ------------
 
 configure_decorations() {
+    # Running this on its own (--only decorations) means no light/dark choice
+    # was made, so take it from the look-and-feel already in use.
+    if (( ! THEME_CHOSEN )); then
+        local laf
+        laf="$(kreadconfig6 --file kdeglobals --group KDE --key LookAndFeelPackage 2>/dev/null)"
+        if [[ -n "$laf" && "$laf" != *dark* ]]; then
+            DECORATION_THEME="WillowLight"
+        else
+            DECORATION_THEME="WillowDark"
+        fi
+    fi
+
     step "15. Window decorations ($DECORATION_THEME)"
     local theme_dir="$HOME/.local/share/aurorae/themes/$DECORATION_THEME"
 
@@ -1170,7 +1396,7 @@ configure_decorations() {
     ok "$DECORATION_THEME set as the window decoration."
 }
 
-# ---------------------------------------------------------- 12. printing ----
+# -------------------------------------------------- 16. printing ------------
 
 setup_printing() {
     step "16. Printing (CUPS)"
@@ -1197,7 +1423,7 @@ setup_printing() {
     info "  sudo systemctl enable --now cups-browsed.service"
 }
 
-# ------------------------------------------------------ 13. spellchecker ----
+# ---------------------------------------------- 17. spellchecker ------------
 
 setup_spellcheck() {
     step "17. Spell checking (Sonnet + Hunspell)"
@@ -1222,7 +1448,7 @@ setup_spellcheck() {
     ok "Sonnet configured for en_US (Hunspell backend)."
 }
 
-# ------------------------------------------------- 14. panels + systray -----
+# ------------------------------------------ 18. panels + systray ------------
 
 configure_panels() {
     step "18. Panels and system tray on every monitor"
@@ -1342,7 +1568,7 @@ JS_EOF
     fi
 }
 
-# ------------------------------------------------------------ 15. wine ------
+# ------------------------------------------------------ 19. wine ------------
 
 install_wine() {
     step "19. Wine"
@@ -1366,7 +1592,7 @@ install_wine() {
     fi
 }
 
-# ------------------------------------------------------ 16. office suite ----
+# ---------------------------------------------- 20. office suite ------------
 
 install_office() {
     step "20. Office suite"
@@ -1405,40 +1631,99 @@ summary() {
     else
         ok "Everything completed without errors."
     fi
+    if (( ${#RUN_STEPS[@]} != ${#STEPS[@]} )); then
+        echo
+        info "This was a partial run (${#RUN_STEPS[@]} of ${#STEPS[@]} steps)."
+        info "Run without --only/--skip to do everything."
+    fi
     echo
     info "Log out and back in (or reboot) so the cursor, window decorations,"
     info "and panel changes take full effect."
 }
 
+# --------------------------------------------- 21. application menu ---------
+
+tidy_application_menu() {
+    step "21. Application menu cleanup"
+
+    echo
+    info "Some packages add developer and diagnostic tools to the application"
+    info "menu that are rarely useful on a desktop:"
+    echo
+    local entry file label
+    for entry in "${MENU_HIDE[@]}"; do
+        info "    - ${entry#*|}"
+    done
+    echo
+    info "Hiding them only takes them out of the menu. The programs stay"
+    info "installed and still work from a terminal or via \"Open with\"."
+    echo
+
+    if ! ask_yn "Hide these entries from the application menu?"; then
+        info "Skipped."
+        return 0
+    fi
+
+    local dest="$HOME/.local/share/applications"
+    mkdir -p "$dest"
+
+    local hidden=0 missing=0 src found
+    for entry in "${MENU_HIDE[@]}"; do
+        file="${entry%%|*}"
+        label="${entry#*|}"
+
+        found=""
+        for src in "/usr/share/applications/$file" \
+                   "/usr/local/share/applications/$file" \
+                   "/var/lib/flatpak/exports/share/applications/$file"; do
+            [[ -f "$src" ]] && { found="$src"; break; }
+        done
+
+        if [[ -z "$found" ]]; then
+            (( missing++ ))
+            continue
+        fi
+
+        # Copy the original first so the override keeps Exec, MimeType and the
+        # rest -- a stub would replace the entry outright, not just hide it.
+        if cp -f "$found" "$dest/$file" \
+           && kwriteconfig6 --file "$dest/$file" --group "Desktop Entry" \
+                            --key NoDisplay true; then
+            (( hidden++ ))
+        else
+            fail "Could not hide $label."
+        fi
+    done
+
+    (( hidden ))  && ok "Hid $hidden of ${#MENU_HIDE[@]} entries from the menu."
+    (( missing )) && info "$missing weren't installed; nothing to hide for those."
+
+    # Refresh the caches so the menu updates without needing a re-login.
+    command -v update-desktop-database >/dev/null 2>&1 \
+        && update-desktop-database "$dest" >/dev/null 2>&1
+    command -v kbuildsycoca6 >/dev/null 2>&1 && kbuildsycoca6 >/dev/null 2>&1
+
+    return 0
+}
+
 # ---------------------------------------------------------------- main ------
 
 main() {
+    parse_args "$@"
     show_intro
 
     preflight
-    fetch_payload
 
-    setup_chaotic_aur             # 1
-    system_update                 # 2
-    install_aur_helper            # 3
-    setup_bluetooth               # 4
-    setup_bootloader              # 5
-    install_base_packages         # 6
-    install_browsers              # 7  (also grants Floorp access to $HOME)
-    install_thunderbird           # 8
-    deploy_loose_files            # 9
-    install_games                 # 10
-    configure_dolphin             # 11
-    configure_default_image_viewer # 12
-    choose_theme_mode             # 13
-    apply_theme_mode              #     (continues step 13)
-    configure_cursor              # 14
-    configure_decorations         # 15
-    setup_printing                # 16
-    setup_spellcheck              # 17
-    configure_panels              # 18
-    install_wine                  # 19
-    install_office                # 20
+    # The payload is only needed by the step that deploys it.
+    if step_selected 9; then
+        fetch_payload
+    fi
+
+    local n fn
+    for n in "${RUN_STEPS[@]}"; do
+        fn="$(step_field "$n" fn)"
+        "$fn"
+    done
 
     summary
 }
