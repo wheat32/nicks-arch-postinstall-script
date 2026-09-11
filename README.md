@@ -70,7 +70,7 @@ infers the variant from the look-and-feel already in use instead.
 | 8 | Asks whether to install Thunderbird |
 | 9 | Deploys the `loose/` files (`userChrome.css` per browser profile, both Willow themes, reference notes) |
 | 10 | Asks whether to install the KDE games |
-| 11 | Writes the Dolphin settings |
+| 11 | Writes the Dolphin settings, shows the menubar, and applies the toolbar/menu layout |
 | 12 | Makes Photos (`koko`) the default image viewer |
 | 13 | Asks for light or dark mode, then applies the global theme, color scheme and icons |
 | 14 | Sets the Breeze Light cursor theme |
@@ -81,6 +81,7 @@ infers the variant from the look-and-feel already in use instead.
 | 19 | Installs Wine (offering to enable `[multilib]` first) |
 | 20 | Asks which office suites you want (LibreOffice / Collabora Office), same numbered selection as the browsers |
 | 21 | Offers to hide developer/diagnostic entries from the application menu |
+| 22 | Puts a Trash icon on the desktop of every user, and seeds `/etc/skel` for future ones |
 
 It is safe to re-run: package installs use `--needed` and config writes are
 idempotent.
@@ -104,6 +105,14 @@ idempotent.
   `/etc/default/grub` and `/boot/grub/grub.cfg` are backed up to
   `.bak.<timestamp>` first, and if the regenerated menu has lost its
   `background_image`/`set theme=` lines the backup is restored automatically.
+- **Step 11 needs the payload too.** Dolphin's toolbar buttons and menu
+  structure live in `~/.local/share/kxmlgui5/dolphin/dolphinui.rc` (KF6 still
+  uses the `kxmlgui5` directory name), not in `dolphinrc`, so that file ships in
+  `loose/` and is copied into place. The menubar is switched on explicitly with
+  `[MainWindow] MenuBar=Enabled` — recent Dolphin hides it behind the hamburger
+  button by default, so leaving it unset is not the same as showing it. If a
+  future Dolphin raises its own `version=` above the one in the shipped file,
+  KXMLGUI may discard the customization and fall back to defaults.
 - **Step 9** can only place `userChrome.css` in a profile that already exists.
   A freshly installed Flatpak has no profile until you launch it once — if the
   script reports a skip, start the app and re-run.
@@ -189,4 +198,14 @@ idempotent.
   `kdialog --passivepopup` if that is missing. It reports the failure count when
   something went wrong, and is skipped silently when there is no graphical
   session — over SSH or from a bare TTY — rather than erroring.
+- **Trash on the desktop (step 22)** writes a `Type=Link` entry pointing at
+  `trash:/` into each user's Desktop folder — the same file Plasma creates when
+  you drag Trash out yourself. It covers every account in `/etc/passwd` between
+  `UID_MIN` and `UID_MAX` (from `/etc/login.defs`) that has a real shell and an
+  existing home, honouring `XDG_DESKTOP_DIR` where one is set and creating the
+  Desktop folder only when it is genuinely missing. Users that already have the
+  icon are left alone, so re-running is safe. It also drops the same file into
+  `/etc/skel/Desktop`, so accounts created later get it as well — those stay
+  root-owned, and `useradd` reassigns them when it copies the skeleton. Needs
+  root, since it writes into other users' homes and `/etc/skel`.
 - `cups-browsed` is installed but left disabled, matching the reference system.

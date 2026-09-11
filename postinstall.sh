@@ -164,7 +164,7 @@ PKGS_PRINT=(
 # Sonnet (the KDE spell-checking framework) backs onto hunspell/aspell/enchant.
 PKGS_SPELL=( hunspell hunspell-en_us aspell enchant )
 
-PKGS_WINE=( wine wine-mono winetricks )
+PKGS_WINE=( wine wine-mono )
 
 # AUR helpers offered in step 3. Both are in Chaotic-AUR, so they install with
 # plain pacman once step 1 has run; only one (or neither) may be chosen.
@@ -188,6 +188,12 @@ MENU_HIDE=(
     "xterm.desktop|XTerm"
     "yad-settings.desktop|YAD settings"
 )
+
+# The desktop Trash icon is just a Type=Link .desktop file dropped in the
+# user's Desktop folder. The ':' is literal and the slash is U+2044 FRACTION
+# SLASH, since a real '/' cannot appear in a filename -- this is the name
+# Plasma itself writes.
+TRASH_DESKTOP_NAME=$'trash:\u2044.desktop'
 
 # Photos' desktop file. The Default Applications KCM keys its "Image viewer"
 # dropdown off image/png alone, so that entry is what makes System Settings
@@ -243,6 +249,7 @@ STEPS=(
     "19|install_wine|Wine|wine|1"
     "20|install_office|Office suite|office|1"
     "21|tidy_application_menu|Application menu cleanup|menu|0"
+    "22|add_trash_to_desktops|Trash icon on every desktop|trash|1"
 )
 
 # Steps chosen for this run, as numbers. Filled in by parse_args.
@@ -1251,10 +1258,31 @@ configure_dolphin() {
     kw "$f" "KFileDialog Settings" "Places Icons Static Size" 32
     kw "$f" PlacesPanel IconSize 32
     kw "$f" Search SearchTool Baloo
+
+    # Show the menubar instead of the hamburger button. Recent Dolphin hides it
+    # by default, so it has to be set explicitly rather than left unset.
+    kw "$f" MainWindow MenuBar Enabled
     kw "$f" PreviewSettings Plugins \
         "ffmpegthumbnailer,appimagethumbnail,audiothumbnail,blenderthumbnail,comicbookthumbnail,cursorthumbnail,djvuthumbnail,ebookthumbnail,exrthumbnail,directorythumbnail,fontthumbnail,imagethumbnail,jpegthumbnail,kraorathumbnail,windowsexethumbnail,windowsimagethumbnail,mobithumbnail,opendocumentthumbnail,gsthumbnail,rawthumbnail,svgthumbnail,ffmpegthumbs,gdk-pixbuf-thumbnailer,gsf-office"
 
     ok "dolphinrc written."
+
+    # The toolbar layout and menu structure live in Dolphin's KXMLGUI file,
+    # not in dolphinrc. KF6 still uses the "kxmlgui5" directory name.
+    local ui_src="$LOOSE/Application Configurations/Dolphin/dolphinui.rc"
+    local ui_dest="$HOME/.local/share/kxmlgui5/dolphin"
+
+    if [[ -z "${LOOSE:-}" || ! -f "$ui_src" ]]; then
+        warn "dolphinui.rc not in the payload; toolbar left at its defaults."
+        return 0
+    fi
+
+    mkdir -p "$ui_dest"
+    if cp -f "$ui_src" "$ui_dest/dolphinui.rc"; then
+        ok "Dolphin toolbar and menu layout applied."
+    else
+        fail "Could not write $ui_dest/dolphinui.rc."
+    fi
 }
 
 # ------------------------------------------- 12. default image viewer -------
@@ -1773,6 +1801,98 @@ tidy_application_menu() {
     return 0
 }
 
+# ---------------------------------------------- 22. trash on the desktop ----
+
+# Echo a user's Desktop directory, honouring XDG_DESKTOP_DIR when they have one.
+user_desktop_dir() {
+    local home="$1" dir=""
+    if sudo test -r "$home/.config/user-dirs.dirs"; then
+        dir="$(sudo awk -F= '/^[[:space:]]*XDG_DESKTOP_DIR/ {
+                   gsub(/"/, "", $2); print $2; exit }' \
+               "$home/.config/user-dirs.dirs" 2>/dev/null)"
+        dir="${dir/\$HOME/$home}"
+    fi
+    [[ -n "$dir" ]] || dir="$home/Desktop"
+    printf '%s\n' "$dir"
+}
+
+add_trash_to_desktops() {
+    step "22. Trash icon on the desktop"
+
+    local uid_min=1000 uid_max=60000 v
+    if [[ -r /etc/login.defs ]]; then
+        v="$(awk '/^UID_MIN/ {print $2; exit}' /etc/login.defs)"; [[ -n "$v" ]] && uid_min="$v"
+        v="$(awk '/^UID_MAX/ {print $2; exit}' /etc/login.defs)"; [[ -n "$v" ]] && uid_max="$v"
+    fi
+
+    local tmp="$WORKDIR/trash.desktop"
+    cat > "$tmp" <<'EOF'
+[Desktop Entry]
+EmptyIcon=user-trash
+Icon=user-trash-full
+Name=Trash
+Type=Link
+URL[$e]=trash:/
+EOF
+
+    local user uid home shell grp desktop
+    local added=0 already=0 skipped=0
+
+    while IFS=: read -r user _ uid _ _ home shell; do
+        (( uid >= uid_min && uid <= uid_max )) || continue
+        case "$shell" in */nologin|*/false|"") continue ;; esac
+        if [[ ! -d "$home" ]]; then
+            warn "$user: no home directory at $home -- skipped."
+            (( skipped++ )); continue
+        fi
+
+        desktop="$(user_desktop_dir "$home")"
+        grp="$(id -gn "$user" 2>/dev/null)" || grp="$user"
+
+        if sudo test -e "$desktop/$TRASH_DESKTOP_NAME"; then
+            info "$user: already has a Trash icon."
+            (( already++ )); continue
+        fi
+
+        # Only create the folder when it is genuinely missing, so an existing
+        # one keeps its own ownership and mode.
+        if ! sudo test -d "$desktop"; then
+            if ! sudo install -d -o "$user" -g "$grp" -m 0755 "$desktop"; then
+                fail "$user: could not create $desktop."
+                (( skipped++ )); continue
+            fi
+        fi
+
+        if sudo install -o "$user" -g "$grp" -m 0644 \
+                "$tmp" "$desktop/$TRASH_DESKTOP_NAME"; then
+            ok "$user: Trash icon added to ${desktop}."
+            (( added++ ))
+        else
+            fail "$user: could not write the Trash icon."
+            (( skipped++ ))
+        fi
+    done < /etc/passwd
+
+    info "Trash icon: $added added, $already already present, $skipped skipped."
+
+    # New accounts have their home seeded from /etc/skel, so seed that too.
+    # These files stay root-owned; useradd reassigns them when it copies them.
+    local skel="/etc/skel/Desktop"
+    if sudo test -e "$skel/$TRASH_DESKTOP_NAME"; then
+        info "/etc/skel already has a Trash icon."
+    else
+        if ! sudo test -d "$skel" && ! sudo install -d -m 0755 "$skel"; then
+            fail "Could not create $skel."
+            return 0
+        fi
+        if sudo install -m 0644 "$tmp" "$skel/$TRASH_DESKTOP_NAME"; then
+            ok "/etc/skel seeded, so new accounts get the icon too."
+        else
+            fail "Could not add the Trash icon to /etc/skel."
+        fi
+    fi
+}
+
 # ---------------------------------------------------------------- main ------
 
 main() {
@@ -1781,8 +1901,8 @@ main() {
 
     preflight
 
-    # The payload is only needed by the step that deploys it.
-    if step_selected 9; then
+    # Steps 9 and 11 are the ones that read files out of the payload.
+    if step_selected 9 || step_selected 11; then
         fetch_payload
     fi
 
