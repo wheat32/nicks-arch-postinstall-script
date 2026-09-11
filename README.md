@@ -31,6 +31,11 @@ standalone, and never assumes a local copy of those files.
 
 Set `REPO_BRANCH=somebranch` to pull the payload from a different branch.
 
+Package and Flatpak installs are retried once before being reported as failed,
+since a dropped connection mid-download is the most common way they fail.
+`RETRY_ATTEMPTS=3` and `RETRY_DELAY=10` change how many tries and how long
+between them.
+
 ### Running only part of it
 
 Every step runs by default. To run a subset:

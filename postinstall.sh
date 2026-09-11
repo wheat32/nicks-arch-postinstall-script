@@ -38,7 +38,8 @@ fail() { err "$*"; FAILURES+=("$*"); }
 
 # Post a desktop notification, if there is a desktop to post it to. Silently
 # does nothing over SSH or from a bare TTY.
-notify_desktop() {
+notify_desktop()
+{
     local title="$1" body="$2"
 
     [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]] || return 1
@@ -46,12 +47,14 @@ notify_desktop() {
 
     if command -v notify-send >/dev/null 2>&1 \
        && notify-send --app-name="Arch post-install" --icon=system-reboot \
-                      --urgency=normal "$title" "$body" >/dev/null 2>&1; then
+                      --urgency=normal "$title" "$body" >/dev/null 2>&1
+    then
         return 0
     fi
     # kdialog is guaranteed by the package list; notify-send is not.
     if command -v kdialog >/dev/null 2>&1 \
-       && kdialog --title "$title" --passivepopup "$body" 20 >/dev/null 2>&1; then
+       && kdialog --title "$title" --passivepopup "$body" 20 >/dev/null 2>&1
+    then
         return 0
     fi
     return 1
@@ -66,11 +69,13 @@ have_tty() { { : </dev/tty; } 2>/dev/null; }
 
 # Read an application's display name out of its .desktop file, so a name the
 # project may change upstream is never hardcoded. Falls back to $2.
-desktop_app_name() {
+desktop_app_name()
+{
     local file="$1" fallback="$2" dir name=""
     for dir in /usr/share/applications /usr/local/share/applications \
                "$HOME/.local/share/applications" \
-               /var/lib/flatpak/exports/share/applications; do
+               /var/lib/flatpak/exports/share/applications
+    do
         [[ -r "$dir/$file" ]] || continue
         name="$(awk -F= '
             /^\[Desktop Entry\]/ { e = 1; next }
@@ -86,12 +91,14 @@ desktop_app_name() {
 # nothing for none. Results land in SELECTED as 1-based indices, de-duplicated
 # and in the order the user typed them.
 SELECTED=()
-ask_multi() {
+ask_multi()
+{
     local names=( "$@" ) i n x seen picks=()
     SELECTED=()
 
     echo
-    for i in "${!names[@]}"; do
+    for i in "${!names[@]}"
+    do
         printf '      %d) %s\n' $((i + 1)) "${names[$i]}"
     done
     echo
@@ -99,8 +106,10 @@ ask_multi() {
     info "or leave it blank for none."
     read -r -p "    Selection: " -a picks </dev/tty
 
-    for n in "${picks[@]}"; do
-        if ! [[ "$n" =~ ^[0-9]+$ ]] || (( n < 1 || n > ${#names[@]} )); then
+    for n in "${picks[@]}"
+    do
+        if ! [[ "$n" =~ ^[0-9]+$ ]] || (( n < 1 || n > ${#names[@]} ))
+        then
             warn "Ignoring '$n'."
             continue
         fi
@@ -111,7 +120,8 @@ ask_multi() {
 }
 
 # Ask a yes/no question. Default is "no" unless $2 is "y".
-ask_yn() {
+ask_yn()
+{
     local prompt="$1" default="${2:-n}" reply hint="[y/N]"
     [[ "$default" == "y" ]] && hint="[Y/n]"
     read -r -p "    $prompt $hint " reply </dev/tty
@@ -274,9 +284,33 @@ STEPS=(
 # Steps chosen for this run, as numbers. Filled in by parse_args.
 RUN_STEPS=()
 
-step_field() { local e; for e in "${STEPS[@]}"; do [[ "${e%%|*}" == "$1" ]] && { IFS='|' read -r _n _f _l _s _r <<< "$e"; case "$2" in fn) printf '%s\n' "$_f";; label) printf '%s\n' "$_l";; name) printf '%s\n' "$_s";; root) printf '%s\n' "$_r";; esac; return 0; }; done; return 1; }
+step_field()
+{
+    local entry num fn label name root
+    for entry in "${STEPS[@]}"
+    do
+        [[ "${entry%%|*}" == "$1" ]] || continue
+        IFS='|' read -r num fn label name root <<< "$entry"
+        case "$2" in
+            fn)    printf '%s\n' "$fn"    ;;
+            label) printf '%s\n' "$label" ;;
+            name)  printf '%s\n' "$name"  ;;
+            root)  printf '%s\n' "$root"  ;;
+        esac
+        return 0
+    done
+    return 1
+}
 
-step_selected() { local n; for n in "${RUN_STEPS[@]}"; do [[ "$n" == "$1" ]] && return 0; done; return 1; }
+step_selected()
+{
+    local n
+    for n in "${RUN_STEPS[@]}"
+    do
+        [[ "$n" == "$1" ]] && return 0
+    done
+    return 1
+}
 
 # Populated as the run goes, so later steps know what actually got installed.
 INSTALL_FLOORP=0
@@ -294,36 +328,77 @@ DECORATION_THEME="WillowDark"
 # Kept from the reference system so a global-theme apply doesn't drop it.
 ACCENT_COLOR="#926EE4"
 
-pac_install() {
+# Downloads fail for transient reasons more often than not -- a dropped
+# connection mid-pull, a CDN hiccup. Run a command again before giving up.
+RETRY_ATTEMPTS="${RETRY_ATTEMPTS:-2}"
+RETRY_DELAY="${RETRY_DELAY:-5}"
+
+retry()
+{
+    local attempt=1 rc=0
+    while true
+    do
+        "$@" && return 0
+        rc=$?
+        (( attempt >= RETRY_ATTEMPTS )) && return "$rc"
+        warn "Attempt $attempt of $RETRY_ATTEMPTS failed (exit $rc). Retrying in ${RETRY_DELAY}s..."
+        sleep "$RETRY_DELAY"
+        (( attempt++ ))
+    done
+}
+
+pac_install()
+{
     (( $# )) || return 0
-    sudo pacman -S --needed --noconfirm "$@"
+    retry sudo pacman -S --needed --noconfirm "$@"
 }
 
 # Remove packages that are installed, leaving the rest alone. Anything still
 # required by another package is reported rather than forced out.
-pac_remove() {
+pac_remove()
+{
     local pkg present=()
-    for pkg in "$@"; do
+    for pkg in "$@"
+    do
         pacman -Qq "$pkg" >/dev/null 2>&1 && present+=( "$pkg" )
     done
     (( ${#present[@]} )) || return 0
 
     info "Removing: ${present[*]}"
-    if sudo pacman -Rns --noconfirm "${present[@]}"; then
+    if sudo pacman -Rns --noconfirm "${present[@]}"
+    then
         ok "Removed: ${present[*]}"
     else
         fail "Could not remove: ${present[*]} (still required by something?)"
     fi
 }
 
-flatpak_install() {
+flatpak_install()
+{
     (( $# )) || return 0
-    sudo flatpak install -y --system --noninteractive flathub "$@"
+
+    retry sudo flatpak install -y --system --noninteractive flathub "$@" || true
+
+    # The exit status covers the whole transaction, so check each app instead:
+    # a run that failed on one runtime may still have installed the others.
+    local app missing=()
+    for app in "$@"
+    do
+        flatpak info --system "$app" >/dev/null 2>&1 || missing+=( "$app" )
+    done
+
+    if (( ${#missing[@]} ))
+    then
+        err "Still not installed after $RETRY_ATTEMPTS attempt(s): ${missing[*]}"
+        return 1
+    fi
+    return 0
 }
 
 # ------------------------------------------------------ argument parsing ----
 
-usage() {
+usage()
+{
     cat <<'USAGE'
 Usage: postinstall.sh [options]
 
@@ -346,17 +421,21 @@ Runs every step by default. To run only part of it:
 Environment overrides:
 
   REPO_BRANCH=<branch>        pull the loose/ payload from another branch
+  RETRY_ATTEMPTS=<n>          tries for each package/flatpak install (default 2)
+  RETRY_DELAY=<seconds>       wait between those tries (default 5)
   PANEL_HEIGHT=<px>           force a panel height instead of inheriting it
   PANEL_MIN_SCREEN_WIDTH=<px> lower bound for giving a screen a panel
 
 USAGE
 }
 
-list_steps() {
+list_steps()
+{
     local e n f l nm r
     printf '\n  %-4s %-14s %s\n' "#" "NAME" "STEP"
     printf '  %-4s %-14s %s\n' "---" "-------------" "--------------------------------"
-    for e in "${STEPS[@]}"; do
+    for e in "${STEPS[@]}"
+    do
         IFS='|' read -r n f l nm r <<< "$e"
         printf '  %-4s %-14s %s\n' "$n" "$nm" "$l"
     done
@@ -365,24 +444,30 @@ list_steps() {
 
 # Expand "13", "theme", "5-9" (and comma-separated mixes) into step numbers.
 # Echoes the numbers, one per line; returns 1 on anything unrecognized.
-expand_step_spec() {
+expand_step_spec()
+{
     local spec="$1" token lo hi n e num name rc=0
     IFS=',' read -ra _tokens <<< "$spec"
-    for token in "${_tokens[@]}"; do
+    for token in "${_tokens[@]}"
+    do
         token="${token//[[:space:]]/}"
         [[ -z "$token" ]] && continue
 
-        if [[ "$token" =~ ^([0-9]+)-([0-9]+)$ ]]; then
+        if [[ "$token" =~ ^([0-9]+)-([0-9]+)$ ]]
+        then
             lo="${BASH_REMATCH[1]}"; hi="${BASH_REMATCH[2]}"
             (( lo > hi )) && { n=$lo; lo=$hi; hi=$n; }
-            for (( n = lo; n <= hi; n++ )); do
+            for (( n = lo; n <= hi; n++ ))
+            do
                 step_field "$n" fn >/dev/null && printf '%s\n' "$n"
             done
             continue
         fi
 
-        if [[ "$token" =~ ^[0-9]+$ ]]; then
-            if step_field "$token" fn >/dev/null; then
+        if [[ "$token" =~ ^[0-9]+$ ]]
+        then
+            if step_field "$token" fn >/dev/null
+            then
                 printf '%s\n' "$token"
             else
                 err "No such step: $token"; rc=1
@@ -392,9 +477,11 @@ expand_step_spec() {
 
         # Otherwise treat it as a name.
         local matched=0
-        for e in "${STEPS[@]}"; do
+        for e in "${STEPS[@]}"
+        do
             IFS='|' read -r num _ _ name _ <<< "$e"
-            if [[ "${token,,}" == "${name,,}" ]]; then
+            if [[ "${token,,}" == "${name,,}" ]]
+            then
                 printf '%s\n' "$num"; matched=1; break
             fi
         done
@@ -403,9 +490,11 @@ expand_step_spec() {
     return $rc
 }
 
-parse_args() {
+parse_args()
+{
     local only_spec="" skip_spec="" arg
-    while (( $# )); do
+    while (( $# ))
+    do
         arg="$1"
         case "$arg" in
             -h|--help)  usage; exit 0 ;;
@@ -418,7 +507,8 @@ parse_args() {
         esac
     done
 
-    if [[ -n "$only_spec" && -n "$skip_spec" ]]; then
+    if [[ -n "$only_spec" && -n "$skip_spec" ]]
+    then
         err "--only and --skip cannot be combined."
         exit 1
     fi
@@ -426,27 +516,34 @@ parse_args() {
     local e n
     RUN_STEPS=()
 
-    if [[ -n "$only_spec" ]]; then
+    if [[ -n "$only_spec" ]]
+    then
         local wanted=() expanded="" w
         expanded="$(expand_step_spec "$only_spec")" || exit 1
-        while read -r w; do
+        while read -r w
+        do
             [[ "$w" =~ ^[0-9]+$ ]] && wanted+=( "$w" )
         done <<< "$expanded"
         (( ${#wanted[@]} )) || { err "--only matched no steps."; exit 1; }
         # Keep script order regardless of how they were typed.
-        for e in "${STEPS[@]}"; do
+        for e in "${STEPS[@]}"
+        do
             n="${e%%|*}"
-            for w in "${wanted[@]}"; do
+            for w in "${wanted[@]}"
+            do
                 [[ "$n" == "$w" ]] && { RUN_STEPS+=( "$n" ); break; }
             done
         done
-    elif [[ -n "$skip_spec" ]]; then
+    elif [[ -n "$skip_spec" ]]
+    then
         local dropped=() expanded="" w
         expanded="$(expand_step_spec "$skip_spec")" || exit 1
-        while read -r w; do
+        while read -r w
+        do
             [[ "$w" =~ ^[0-9]+$ ]] && dropped+=( "$w" )
         done <<< "$expanded"
-        for e in "${STEPS[@]}"; do
+        for e in "${STEPS[@]}"
+        do
             n="${e%%|*}"
             local drop=0 d
             for d in "${dropped[@]}"; do [[ "$n" == "$d" ]] && drop=1; done
@@ -459,9 +556,11 @@ parse_args() {
 }
 
 # Does anything in this run need root?
-run_needs_root() {
+run_needs_root()
+{
     local n
-    for n in "${RUN_STEPS[@]}"; do
+    for n in "${RUN_STEPS[@]}"
+    do
         [[ "$(step_field "$n" root)" == "1" ]] && return 0
     done
     return 1
@@ -469,25 +568,29 @@ run_needs_root() {
 
 # --------------------------------------------------------------- intro ------
 
-show_intro() {
+show_intro()
+{
     local partial=0
     (( ${#RUN_STEPS[@]} == ${#STEPS[@]} )) || partial=1
 
     printf '\n%sArch Linux post-install setup%s\n' "$C_BOLD$C_BLUE" "$C_RESET"
     printf '%s\n' "-------------------------------------------------------------"
 
-    if (( partial )); then
+    if (( partial ))
+    then
         printf '\n  Partial run -- only these steps will run:\n\n'
     else
         printf '\n  This sets up a fresh Arch Linux + KDE Plasma install. It will:\n\n'
     fi
 
     local n
-    for n in "${RUN_STEPS[@]}"; do
+    for n in "${RUN_STEPS[@]}"
+    do
         printf '    %3s.  %s\n' "$n" "$(step_field "$n" label)"
     done
 
-    if (( ! partial )); then
+    if (( ! partial ))
+    then
         cat <<'INTRO'
 
   You will be asked about:
@@ -522,7 +625,8 @@ INTRO
 
 INTRO
 
-    if have_tty; then
+    if have_tty
+    then
         printf '  %sPress Enter to begin, or Ctrl+C to abort.%s ' "$C_BOLD" "$C_RESET"
         read -r </dev/tty
         echo
@@ -533,30 +637,36 @@ INTRO
 
 # ------------------------------------------------------------ preflight -----
 
-preflight() {
+preflight()
+{
     step "Preflight"
 
-    if [[ $EUID -eq 0 ]]; then
+    if [[ $EUID -eq 0 ]]
+    then
         err "Run this as your normal user, not as root (it uses sudo itself)."
         exit 1
     fi
-    if ! command -v pacman >/dev/null; then
+    if ! command -v pacman >/dev/null
+    then
         err "pacman not found -- this script is for Arch Linux."
         exit 1
     fi
-    for c in curl tar bsdtar sudo; do
+    for c in curl tar bsdtar sudo
+    do
         command -v "$c" >/dev/null || { err "Missing required tool: $c"; exit 1; }
     done
 
     # Every prompt in this script reads from /dev/tty, so there is no point
     # continuing without one.
-    if ! have_tty; then
+    if ! have_tty
+    then
         err "No controlling terminal, but this script is interactive."
         err "Run it from a terminal. 'curl ... | bash' is fine; cron and CI are not."
         exit 1
     fi
 
-    if run_needs_root; then
+    if run_needs_root
+    then
         info "Caching sudo credentials..."
         sudo -v || { err "sudo failed."; exit 1; }
         # Keep sudo alive for the whole run.
@@ -569,17 +679,20 @@ preflight() {
 }
 
 # Always pull the loose/ payload from GitHub rather than trusting the cwd.
-fetch_payload() {
+fetch_payload()
+{
     step "Downloading configuration payload"
     WORKDIR="$(mktemp -d)"
     info "Source: $TARBALL_URL"
-    if ! curl -fsSL "$TARBALL_URL" -o "$WORKDIR/repo.tar.gz"; then
+    if ! curl -fsSL "$TARBALL_URL" -o "$WORKDIR/repo.tar.gz"
+    then
         err "Could not download the repository payload."
         exit 1
     fi
     tar -xzf "$WORKDIR/repo.tar.gz" -C "$WORKDIR" || { err "Extract failed."; exit 1; }
     LOOSE="$(find "$WORKDIR" -maxdepth 2 -type d -name loose -print -quit)"
-    if [[ -z "$LOOSE" ]]; then
+    if [[ -z "$LOOSE" ]]
+    then
         err "No loose/ directory inside the downloaded payload."
         exit 1
     fi
@@ -588,10 +701,12 @@ fetch_payload() {
 
 # ------------------------------------------------------ Chaotic-AUR ---------
 
-setup_chaotic_aur() {
+setup_chaotic_aur()
+{
     step "1. Chaotic-AUR repository"
 
-    if grep -qE '^[[:space:]]*\[chaotic-aur\]' /etc/pacman.conf; then
+    if grep -qE '^[[:space:]]*\[chaotic-aur\]' /etc/pacman.conf
+    then
         ok "[chaotic-aur] is already configured; nothing to do."
         return 0
     fi
@@ -601,7 +716,8 @@ setup_chaotic_aur() {
 
     info "Fetching the Chaotic-AUR keyring..."
     if ! curl -fsSL -o "$dir/chaotic-keyring.pkg.tar.zst" \
-            "$CHAOTIC_CDN/chaotic-keyring.pkg.tar.zst"; then
+            "$CHAOTIC_CDN/chaotic-keyring.pkg.tar.zst"
+    then
         fail "Could not download the Chaotic-AUR keyring; skipping the repository."
         return 1
     fi
@@ -611,17 +727,20 @@ setup_chaotic_aur() {
     # fingerprints from there means the script never has to hardcode a key and
     # keeps working if the project rotates or adds one.
     if ! bsdtar -xf "$dir/chaotic-keyring.pkg.tar.zst" -C "$dir" \
-            usr/share/pacman/keyrings/ 2>/dev/null; then
+            usr/share/pacman/keyrings/ 2>/dev/null
+    then
         fail "Could not unpack the Chaotic-AUR keyring; skipping the repository."
         return 1
     fi
 
     local kr="$dir/usr/share/pacman/keyrings"
     local keys=() k
-    if [[ -r "$kr/chaotic-trusted" ]]; then
+    if [[ -r "$kr/chaotic-trusted" ]]
+    then
         mapfile -t keys < <(awk -F: '/^[0-9A-Fa-f]{40}:/ {print $1}' "$kr/chaotic-trusted")
     fi
-    if (( ${#keys[@]} == 0 )) || [[ ! -r "$kr/chaotic.gpg" ]]; then
+    if (( ${#keys[@]} == 0 )) || [[ ! -r "$kr/chaotic.gpg" ]]
+    then
         fail "The Chaotic-AUR keyring declared no trusted keys; skipping the repository."
         return 1
     fi
@@ -630,12 +749,15 @@ setup_chaotic_aur() {
     for k in "${keys[@]}"; do info "  $k"; done
 
     info "Importing and locally signing them..."
-    if ! sudo pacman-key --add "$kr/chaotic.gpg"; then
+    if ! sudo pacman-key --add "$kr/chaotic.gpg"
+    then
         fail "Could not import the Chaotic-AUR keys; skipping the repository."
         return 1
     fi
-    for k in "${keys[@]}"; do
-        if ! sudo pacman-key --lsign-key "$k"; then
+    for k in "${keys[@]}"
+    do
+        if ! sudo pacman-key --lsign-key "$k"
+        then
             fail "Could not locally sign Chaotic-AUR key $k; skipping the repository."
             return 1
         fi
@@ -647,7 +769,8 @@ setup_chaotic_aur() {
     info "Installing chaotic-keyring and chaotic-mirrorlist..."
     if ! sudo pacman -U --needed --noconfirm \
             "$CHAOTIC_CDN/chaotic-keyring.pkg.tar.zst" \
-            "$CHAOTIC_CDN/chaotic-mirrorlist.pkg.tar.zst"; then
+            "$CHAOTIC_CDN/chaotic-mirrorlist.pkg.tar.zst"
+    then
         fail "Could not install the Chaotic-AUR keyring/mirrorlist."
         return 1
     fi
@@ -657,7 +780,8 @@ setup_chaotic_aur() {
     printf '\n[chaotic-aur]\nInclude = /etc/pacman.d/chaotic-mirrorlist\n' \
         | sudo tee -a /etc/pacman.conf >/dev/null
 
-    if grep -qE '^[[:space:]]*\[chaotic-aur\]' /etc/pacman.conf; then
+    if grep -qE '^[[:space:]]*\[chaotic-aur\]' /etc/pacman.conf
+    then
         ok "[chaotic-aur] enabled."
     else
         fail "Failed to add [chaotic-aur] to /etc/pacman.conf."
@@ -669,10 +793,12 @@ setup_chaotic_aur() {
 # Runs after the repositories are set up, so the new ones are picked up here
 # instead of needing a second sync. A bare `pacman -Sy` followed by `-S` is a
 # partial upgrade, which Arch warns against, so always do the full -Syu.
-system_update() {
+system_update()
+{
     step "2. System update"
     info "Synchronizing databases and updating the system..."
-    if sudo pacman -Syu --noconfirm; then
+    if sudo pacman -Syu --noconfirm
+    then
         ok "System up to date."
     else
         warn "Full upgrade had trouble; continuing anyway."
@@ -681,12 +807,15 @@ system_update() {
 
 # ------------------------------------------------------- 3. AUR helper ------
 
-install_aur_helper() {
+install_aur_helper()
+{
     step "3. AUR helper"
 
     local h
-    for h in "${AUR_HELPERS[@]}"; do
-        if pacman -Qq "$h" >/dev/null 2>&1 || command -v "$h" >/dev/null 2>&1; then
+    for h in "${AUR_HELPERS[@]}"
+    do
+        if pacman -Qq "$h" >/dev/null 2>&1 || command -v "$h" >/dev/null 2>&1
+        then
             ok "$h is already installed; nothing to do."
             return 0
         fi
@@ -709,8 +838,10 @@ install_aur_helper() {
 
     # Chaotic-AUR carries both, so this is a normal package install if step 1
     # succeeded.
-    if pacman -Si "$pick" >/dev/null 2>&1; then
-        if pac_install "$pick"; then
+    if pacman -Si "$pick" >/dev/null 2>&1
+    then
+        if pac_install "$pick"
+        then
             ok "$pick installed."
         else
             fail "Could not install $pick."
@@ -720,13 +851,15 @@ install_aur_helper() {
 
     # Otherwise fall back to building it from the AUR by hand.
     warn "$pick is not in any configured repository; building it from the AUR."
-    if ! pac_install git base-devel; then
+    if ! pac_install git base-devel
+    then
         fail "Could not install git/base-devel; skipping $pick."
         return 1
     fi
     local src="$WORKDIR/$pick"
     if git clone --depth 1 "https://aur.archlinux.org/${pick}.git" "$src" >/dev/null 2>&1 \
-       && ( cd "$src" && makepkg -si --noconfirm >/dev/null 2>&1 ); then
+       && ( cd "$src" && makepkg -si --noconfirm >/dev/null 2>&1 )
+    then
         ok "$pick built and installed."
     else
         fail "Could not build $pick from the AUR."
@@ -735,10 +868,12 @@ install_aur_helper() {
 
 # -------------------------------------------------- 4. bluetooth ------------
 
-setup_bluetooth() {
+setup_bluetooth()
+{
     step "4. Bluetooth"
     pac_install bluez bluez-utils || fail "bluez install failed"
-    if sudo systemctl enable --now bluetooth.service; then
+    if sudo systemctl enable --now bluetooth.service
+    then
         ok "bluetooth.service enabled and started."
     else
         fail "Could not enable/start bluetooth.service"
@@ -751,9 +886,11 @@ setup_bluetooth() {
 # kernel. /boot/vmlinuz-* is copied into place by a hook and is not owned by any
 # package, so the authoritative list is the pkgbase marker each kernel package
 # drops in /usr/lib/modules/<release>/.
-list_kernels() {
+list_kernels()
+{
     local d pkgbase ver kver img cand
-    for d in /usr/lib/modules/*/; do
+    for d in /usr/lib/modules/*/
+    do
         [[ -f "$d/pkgbase" ]] || continue
         pkgbase="$(<"$d/pkgbase")"
         kver="$(basename "$d")"
@@ -762,7 +899,8 @@ list_kernels() {
 
         # Prefer the copy the bootloader actually points at.
         img=""
-        for cand in "/boot/vmlinuz-$pkgbase" "/boot/vmlinuz-$kver" "${d%/}/vmlinuz"; do
+        for cand in "/boot/vmlinuz-$pkgbase" "/boot/vmlinuz-$kver" "${d%/}/vmlinuz"
+        do
             [[ -f "$cand" ]] && { img="$cand"; break; }
         done
         [[ -n "$img" ]] && printf '%s %s %s %s\n' "$ver" "$img" "$pkgbase" "$kver"
@@ -772,7 +910,8 @@ list_kernels() {
 # Walk grub.cfg and emit "<positional path>|<id path>|<kernel image>" for every
 # entry, covering both the numeric form GRUB_DEFAULT accepts (0, 1>2) and the
 # more robust menuentry-id form.
-grub_entry_map() {
+grub_entry_map()
+{
     sudo awk '
         function id_of(line,   n, a) {
             n = index(line, "menuentry_id_option")
@@ -802,19 +941,23 @@ grub_entry_map() {
 }
 
 # What does the current GRUB_DEFAULT actually boot? Echoes the kernel image.
-grub_current_kernel() {
+grub_current_kernel()
+{
     local default pos id kernel
     default="$(awk -F= '/^[[:space:]]*GRUB_DEFAULT=/ {
                    v = $2; gsub(/^[\047"]|[\047"]$/, "", v); print v; exit }' /etc/default/grub)"
     [[ -n "$default" ]] || default="0"
 
-    if [[ "$default" == "saved" ]]; then
+    if [[ "$default" == "saved" ]]
+    then
         default="$(sudo awk -F= '/^saved_entry=/ {print $2; exit}' /boot/grub/grubenv 2>/dev/null)"
         [[ -n "$default" ]] || return 1
     fi
 
-    while IFS='|' read -r pos id kernel; do
-        if [[ "$default" == "$pos" || "$default" == "$id" ]]; then
+    while IFS='|' read -r pos id kernel
+    do
+        if [[ "$default" == "$pos" || "$default" == "$id" ]]
+        then
             printf '%s\n' "$kernel"
             return 0
         fi
@@ -824,16 +967,19 @@ grub_current_kernel() {
 
 # Count the directives that draw a background or theme, so a regeneration that
 # silently drops them can be caught and rolled back.
-grub_decor_count() {
+grub_decor_count()
+{
     sudo grep -cE '^[[:space:]]*(background_image|set[[:space:]]+theme=)' \
         /boot/grub/grub.cfg 2>/dev/null || echo 0
 }
 
-setup_grub_default() {
+setup_grub_default()
+{
     local target_img="$1" target_base entry pos id kernel target="" current
     target_base="$(basename "$target_img")"
 
-    if [[ ! -r /boot/grub/grub.cfg ]] && ! sudo test -r /boot/grub/grub.cfg; then
+    if [[ ! -r /boot/grub/grub.cfg ]] && ! sudo test -r /boot/grub/grub.cfg
+    then
         fail "/boot/grub/grub.cfg is not readable; leaving GRUB alone."
         return 1
     fi
@@ -841,19 +987,22 @@ setup_grub_default() {
     # Nothing to do if the existing default already boots the newest kernel.
     # This is the common case on a system that is already set up correctly,
     # and it means the script does not touch GRUB at all.
-    if current="$(grub_current_kernel)" && [[ "$(basename "$current")" == "$target_base" ]]; then
+    if current="$(grub_current_kernel)" && [[ "$(basename "$current")" == "$target_base" ]]
+    then
         ok "GRUB already boots $target_base by default; leaving it untouched."
         return 0
     fi
 
     # Read the menu as it stands -- no pre-emptive regeneration.
-    while IFS='|' read -r pos id kernel; do
+    while IFS='|' read -r pos id kernel
+    do
         [[ "$(basename "$kernel")" == "$target_base" ]] || continue
         if [[ "$id" != *">"* ]]; then target="$id"; break; fi
         [[ -z "$target" ]] && target="$id"
     done < <(grub_entry_map)
 
-    if [[ -z "$target" ]]; then
+    if [[ -z "$target" ]]
+    then
         fail "No GRUB entry for $target_base in the current menu; leaving GRUB alone."
         return 1
     fi
@@ -866,7 +1015,8 @@ setup_grub_default() {
     sudo cp /etc/default/grub "/etc/default/grub.bak.$stamp"
     sudo cp /boot/grub/grub.cfg "/boot/grub/grub.cfg.bak.$stamp"
 
-    if sudo grep -qE '^[[:space:]]*GRUB_DEFAULT=' /etc/default/grub; then
+    if sudo grep -qE '^[[:space:]]*GRUB_DEFAULT=' /etc/default/grub
+    then
         sudo sed -i "s|^[[:space:]]*GRUB_DEFAULT=.*|GRUB_DEFAULT='${target}'|" /etc/default/grub
     else
         printf "GRUB_DEFAULT='%s'\n" "$target" | sudo tee -a /etc/default/grub >/dev/null
@@ -874,7 +1024,8 @@ setup_grub_default() {
 
     # GRUB_DEFAULT is only read when the menu is generated, so one regeneration
     # is unavoidable. Everything else in /etc/default/grub is left as it was.
-    if ! sudo grub-mkconfig -o /boot/grub/grub.cfg >/dev/null 2>&1; then
+    if ! sudo grub-mkconfig -o /boot/grub/grub.cfg >/dev/null 2>&1
+    then
         fail "grub-mkconfig failed; restoring the previous grub.cfg."
         sudo cp "/boot/grub/grub.cfg.bak.$stamp" /boot/grub/grub.cfg
         sudo cp "/etc/default/grub.bak.$stamp" /etc/default/grub
@@ -882,7 +1033,8 @@ setup_grub_default() {
     fi
 
     decor_after="$(grub_decor_count)"
-    if (( decor_before > 0 && decor_after == 0 )); then
+    if (( decor_before > 0 && decor_after == 0 ))
+    then
         fail "Regenerating grub.cfg dropped the background/theme; restoring the backup."
         sudo cp "/boot/grub/grub.cfg.bak.$stamp" /boot/grub/grub.cfg
         sudo cp "/etc/default/grub.bak.$stamp" /etc/default/grub
@@ -892,7 +1044,8 @@ setup_grub_default() {
     ok "GRUB now boots $target_base by default (background/theme preserved)."
 }
 
-setup_sdboot_default() {
+setup_sdboot_default()
+{
     local target_img="$1" target_pkgbase="$2" target_kver="$3"
     local target_base esp entry line best=""
     target_base="$(basename "$target_img")"
@@ -904,25 +1057,29 @@ setup_sdboot_default() {
     #   linux /vmlinuz-linux
     #   linux /<machine-id>/<kernel-release>/linux
     # so accept a match on the image name, the pkgbase, or the kernel release.
-    for entry in "$esp"/loader/entries/*.conf; do
+    for entry in "$esp"/loader/entries/*.conf
+    do
         [[ -f "$entry" ]] || continue
         line="$(sudo grep -E '^[[:space:]]*linux[[:space:]]' "$entry" 2>/dev/null)"
         [[ -n "$line" ]] || continue
         if [[ "$line" == *"$target_base"* || "$line" == *"/$target_pkgbase"* \
-              || "$line" == *"$target_kver"* ]]; then
+              || "$line" == *"$target_kver"* ]]
+        then
             best="$(basename "$entry")"
             # Prefer a normal entry over a fallback one.
             [[ "$best" == *fallback* ]] || break
         fi
     done
 
-    if [[ -z "$best" ]]; then
+    if [[ -z "$best" ]]
+    then
         fail "No systemd-boot entry references $target_base; leaving loader.conf alone."
         return 1
     fi
 
     sudo cp "$esp/loader/loader.conf" "$esp/loader/loader.conf.bak.$(date +%Y%m%d%H%M%S)" 2>/dev/null
-    if sudo grep -qE '^[[:space:]]*default[[:space:]]' "$esp/loader/loader.conf" 2>/dev/null; then
+    if sudo grep -qE '^[[:space:]]*default[[:space:]]' "$esp/loader/loader.conf" 2>/dev/null
+    then
         sudo sed -i "s|^[[:space:]]*default[[:space:]].*|default ${best}|" "$esp/loader/loader.conf"
     else
         printf 'default %s\n' "$best" | sudo tee -a "$esp/loader/loader.conf" >/dev/null
@@ -930,23 +1087,27 @@ setup_sdboot_default() {
     ok "systemd-boot now boots $best by default."
 }
 
-setup_bootloader() {
+setup_bootloader()
+{
     step "5. Default boot kernel"
 
     local vers=() imgs=() bases=() kvers=() v i b k
-    while read -r v i b k; do
+    while read -r v i b k
+    do
         vers+=( "$v" ); imgs+=( "$i" ); bases+=( "$b" ); kvers+=( "$k" )
     done < <(list_kernels)
 
     local count=${#vers[@]}
-    if (( count < 2 )); then
+    if (( count < 2 ))
+    then
         info "Only $count kernel installed -- nothing to choose between. Skipping."
         return 0
     fi
 
     # Mark the newest so the choice is obvious; pacman decides what "newest" is.
     local newest=0 n
-    for (( n = 1; n < count; n++ )); do
+    for (( n = 1; n < count; n++ ))
+    do
         [[ "$(vercmp "${vers[$n]}" "${vers[$newest]}")" -gt 0 ]] && newest=$n
     done
 
@@ -954,10 +1115,12 @@ setup_bootloader() {
     info "More than one kernel is installed:"
     echo
     local width=0
-    for (( n = 0; n < count; n++ )); do
+    for (( n = 0; n < count; n++ ))
+    do
         (( ${#bases[$n]} > width )) && width=${#bases[$n]}
     done
-    for (( n = 0; n < count; n++ )); do
+    for (( n = 0; n < count; n++ ))
+    do
         printf '      %d) %-*s  %s%s\n' "$((n + 1))" "$width" "${bases[$n]}" \
             "${vers[$n]}" "$( (( n == newest )) && printf '   (newest)' )"
     done
@@ -969,23 +1132,29 @@ setup_bootloader() {
         choice </dev/tty
     choice="${choice//[[:space:]]/}"
 
-    if [[ -n "$choice" ]]; then
+    if [[ -n "$choice" ]]
+    then
         local resolved=-1
-        if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= count )); then
+        if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= count ))
+        then
             resolved=$(( choice - 1 ))
-        elif [[ "${choice,,}" == "latest" || "${choice,,}" == "newest" ]]; then
+        elif [[ "${choice,,}" == "latest" || "${choice,,}" == "newest" ]]
+        then
             resolved=$newest
         else
-            for (( n = 0; n < count; n++ )); do
+            for (( n = 0; n < count; n++ ))
+            do
                 # "lts" matches linux-lts, "zen" matches linux-zen, and so on.
                 if [[ "${bases[$n],,}" == "${choice,,}" \
-                   || "${bases[$n],,}" == "linux-${choice,,}" ]]; then
+                   || "${bases[$n],,}" == "linux-${choice,,}" ]]
+                then
                     resolved=$n; break
                 fi
             done
         fi
 
-        if (( resolved < 0 )); then
+        if (( resolved < 0 ))
+        then
             warn "Unrecognized choice '$choice' -- using the newest kernel."
         else
             pick=$resolved
@@ -994,9 +1163,11 @@ setup_bootloader() {
 
     info "Default boot kernel: ${bases[$pick]} (${vers[$pick]})"
 
-    if [[ -d /boot/grub ]] && command -v grub-mkconfig >/dev/null; then
+    if [[ -d /boot/grub ]] && command -v grub-mkconfig >/dev/null
+    then
         setup_grub_default "${imgs[$pick]}"
-    elif command -v bootctl >/dev/null && bootctl is-installed >/dev/null 2>&1; then
+    elif command -v bootctl >/dev/null && bootctl is-installed >/dev/null 2>&1
+    then
         setup_sdboot_default "${imgs[$pick]}" "${bases[$pick]}" "${kvers[$pick]}"
     else
         warn "Neither GRUB nor systemd-boot detected. Skipping."
@@ -1005,10 +1176,12 @@ setup_bootloader() {
 
 # ---------------------------------------------- 6. base packages ------------
 
-install_base_packages() {
+install_base_packages()
+{
     step "6. Core packages (KDE, Plasma, Discover, Flatpak, portals)"
     info "Installing ${#PKGS_BASE[@]} packages -- this takes a while."
-    if pac_install "${PKGS_BASE[@]}"; then
+    if pac_install "${PKGS_BASE[@]}"
+    then
         ok "Core packages installed."
     else
         fail "Some core packages failed to install."
@@ -1019,11 +1192,15 @@ install_base_packages() {
     setup_login_manager
 
     # Flathub must exist before any of the flatpak steps below.
-    if command -v flatpak >/dev/null; then
-        sudo flatpak remote-add --if-not-exists --system \
-            flathub https://dl.flathub.org/repo/flathub.flatpakrepo >/dev/null 2>&1 \
-            && ok "Flathub remote configured." \
-            || fail "Could not add the Flathub remote."
+    if command -v flatpak >/dev/null
+    then
+        if retry sudo flatpak remote-add --if-not-exists --system \
+                flathub https://dl.flathub.org/repo/flathub.flatpakrepo >/dev/null 2>&1
+        then
+            ok "Flathub remote configured."
+        else
+            fail "Could not add the Flathub remote."
+        fi
     fi
 }
 
@@ -1031,8 +1208,10 @@ install_base_packages() {
 # display-manager.service alias, so an existing one has to be disabled first.
 # If enabling fails the previous manager is put back, so the machine is never
 # left without a way to log in.
-setup_login_manager() {
-    if ! pacman -Qq plasma-login-manager >/dev/null 2>&1; then
+setup_login_manager()
+{
+    if ! pacman -Qq plasma-login-manager >/dev/null 2>&1
+    then
         fail "plasma-login-manager is not installed; leaving the display manager alone."
         return 1
     fi
@@ -1044,19 +1223,23 @@ setup_login_manager() {
     local dm_alias="/etc/systemd/system/display-manager.service"
     local current=""
 
-    if [[ -L "$dm_alias" && ! -e "$dm_alias" ]]; then
+    if [[ -L "$dm_alias" && ! -e "$dm_alias" ]]
+    then
         info "Clearing a stale display-manager.service link..."
         sudo rm -f "$dm_alias" || warn "Could not remove the stale link."
-    elif [[ -e "$dm_alias" ]]; then
+    elif [[ -e "$dm_alias" ]]
+    then
         current="$(basename "$(readlink -f "$dm_alias" 2>/dev/null)" 2>/dev/null)"
     fi
 
-    if [[ "$current" == "plasmalogin.service" ]]; then
+    if [[ "$current" == "plasmalogin.service" ]]
+    then
         ok "Plasma Login Manager is already the display manager."
         return 0
     fi
 
-    if [[ -n "$current" ]]; then
+    if [[ -n "$current" ]]
+    then
         info "Disabling the current display manager ($current)..."
         sudo systemctl disable "$current" >/dev/null 2>&1 \
             || warn "Could not disable $current; enabling may fail."
@@ -1066,12 +1249,14 @@ setup_login_manager() {
 
     # Deliberately not --now: switching the display manager mid-session would
     # kill the running desktop. It takes effect on the next reboot.
-    if sudo systemctl enable plasmalogin.service >/dev/null 2>&1; then
+    if sudo systemctl enable plasmalogin.service >/dev/null 2>&1
+    then
         ok "Plasma Login Manager enabled as the display manager."
         info "Takes effect on the next reboot."
     else
         fail "Could not enable plasmalogin.service."
-        if [[ -n "$current" ]] && sudo systemctl enable "$current" >/dev/null 2>&1; then
+        if [[ -n "$current" ]] && sudo systemctl enable "$current" >/dev/null 2>&1
+        then
             warn "Put $current back so you still have a login screen."
         fi
     fi
@@ -1079,28 +1264,37 @@ setup_login_manager() {
 
 # ------------------------------------------------ 4/5. browsers + Floorp ----
 
-install_browsers() {
+install_browsers()
+{
     step "7. Browsers (Flatpak)"
     local chosen=() n id
 
     ask_multi "${BROWSER_NAMES[@]}"
-    for n in "${SELECTED[@]}"; do
+    for n in "${SELECTED[@]}"
+    do
         id="${BROWSER_IDS[$((n - 1))]}"
         chosen+=( "$id" )
         [[ "$id" == "one.ablaze.floorp" ]] && INSTALL_FLOORP=1
     done
 
-    if (( ${#chosen[@]} == 0 )); then
+    if (( ${#chosen[@]} == 0 ))
+    then
         info "No browsers selected."
         return 0
     fi
     info "Installing: ${chosen[*]}"
-    flatpak_install "${chosen[@]}" && ok "Browsers installed." \
-        || fail "One or more browser flatpaks failed to install."
+    if flatpak_install "${chosen[@]}"
+    then
+        ok "Browsers installed."
+    else
+        fail "One or more browser flatpaks failed to install (see above)."
+    fi
 
-    if (( INSTALL_FLOORP )); then
+    if (( INSTALL_FLOORP ))
+    then
         # Step 5: Floorp needs read/write access to $HOME.
-        if sudo flatpak override --system --filesystem=home one.ablaze.floorp; then
+        if sudo flatpak override --system --filesystem=home one.ablaze.floorp
+        then
             ok "Floorp granted read/write access to your home directory."
         else
             fail "Could not set the Floorp home-directory permission."
@@ -1110,10 +1304,13 @@ install_browsers() {
 
 # ------------------------------------------------ 8. Thunderbird ------------
 
-install_thunderbird() {
+install_thunderbird()
+{
     step "8. Thunderbird"
-    if ask_yn "Install Thunderbird (Flatpak)?"; then
-        if flatpak_install org.mozilla.thunderbird; then
+    if ask_yn "Install Thunderbird (Flatpak)?"
+    then
+        if flatpak_install org.mozilla.thunderbird
+        then
             INSTALL_THUNDERBIRD=1
             ok "Thunderbird installed."
         else
@@ -1128,7 +1325,8 @@ install_thunderbird() {
 
 # Echo the default profile directory under a Firefox-family root, creating
 # nothing. Prefers the install's default-release profile, then Default=1.
-find_moz_profile() {
+find_moz_profile()
+{
     local root="$1" ini="$1/profiles.ini" path
     [[ -f "$ini" ]] || return 1
 
@@ -1139,7 +1337,8 @@ find_moz_profile() {
         ins && $1=="Default" { print $2; exit }
     ' "$ini")"
 
-    if [[ -z "$path" ]]; then
+    if [[ -z "$path" ]]
+    then
         path="$(awk -F= '
             /^\[Profile/ { p=""; d=0 }
             $1=="Path"    { p=$2 }
@@ -1155,19 +1354,23 @@ find_moz_profile() {
 }
 
 # Find the newest *.default-release (or any profile dir) as a fallback.
-guess_moz_profile() {
+guess_moz_profile()
+{
     local root="$1" d
-    for d in "$root"/*.default-release "$root"/*.default "$root"/*; do
+    for d in "$root"/*.default-release "$root"/*.default "$root"/*
+    do
         [[ -d "$d" && -f "$d/prefs.js" ]] && { printf '%s\n' "$d"; return 0; }
     done
-    for d in "$root"/*.default-release "$root"/*.default; do
+    for d in "$root"/*.default-release "$root"/*.default
+    do
         [[ -d "$d" ]] && { printf '%s\n' "$d"; return 0; }
     done
     return 1
 }
 
 # Drop userChrome.css into a profile and turn on legacy stylesheet support.
-deploy_userchrome() {
+deploy_userchrome()
+{
     local label="$1" src="$2" root="$3" profile
     [[ -f "$src" ]] || { warn "$label: no userChrome.css in the payload."; return 1; }
     [[ -d "$root" ]] || { info "$label: not installed (no $root) -- skipped."; return 1; }
@@ -1183,13 +1386,15 @@ deploy_userchrome() {
     # userChrome.css is ignored unless this pref is on (see the documentation
     # file in loose/Application Configurations/).
     local userjs="$profile/user.js"
-    if ! grep -q 'toolkit.legacyUserProfileCustomizations.stylesheets' "$userjs" 2>/dev/null; then
+    if ! grep -q 'toolkit.legacyUserProfileCustomizations.stylesheets' "$userjs" 2>/dev/null
+    then
         printf 'user_pref("toolkit.legacyUserProfileCustomizations.stylesheets", true);\n' >> "$userjs"
     fi
     ok "$label: userChrome.css -> ${profile/#$HOME/\~}/chrome/"
 }
 
-deploy_loose_files() {
+deploy_loose_files()
+{
     step "9. Deploying the loose/ configuration files"
     local cfg="$LOOSE/Application Configurations"
 
@@ -1198,7 +1403,8 @@ deploy_loose_files() {
         "$HOME/.var/app/one.ablaze.floorp/.floorp"
 
     # --- Firefox (Flatpak first, then a native install) ---
-    if [[ -d "$HOME/.var/app/org.mozilla.firefox/.mozilla/firefox" ]]; then
+    if [[ -d "$HOME/.var/app/org.mozilla.firefox/.mozilla/firefox" ]]
+    then
         deploy_userchrome "Firefox (Flatpak)" "$cfg/Firefox/chrome/userChrome.css" \
             "$HOME/.var/app/org.mozilla.firefox/.mozilla/firefox"
     else
@@ -1210,10 +1416,12 @@ deploy_loose_files() {
     local tb_root="" r
     for r in "$HOME/.var/app/org.mozilla.thunderbird/.thunderbird" \
              "$HOME/.var/app/org.mozilla.Thunderbird/.thunderbird" \
-             "$HOME/.thunderbird"; do
+             "$HOME/.thunderbird"
+    do
         [[ -d "$r" ]] && { tb_root="$r"; break; }
     done
-    if [[ -n "$tb_root" ]]; then
+    if [[ -n "$tb_root" ]]
+    then
         deploy_userchrome "Thunderbird" "$cfg/Thunderbird/chrome/userChrome.css" "$tb_root"
     else
         info "Thunderbird: not installed / never launched -- skipped."
@@ -1222,8 +1430,10 @@ deploy_loose_files() {
     # --- Window decoration themes (step 11 applies whichever was chosen) ---
     # Both variants are installed so switching light/dark later needs no re-run.
     local deco
-    for deco in WillowDark WillowLight; do
-        if [[ -d "$LOOSE/Window Decorations/$deco" ]]; then
+    for deco in WillowDark WillowLight
+    do
+        if [[ -d "$LOOSE/Window Decorations/$deco" ]]
+        then
             mkdir -p "$HOME/.local/share/aurorae/themes"
             cp -r "$LOOSE/Window Decorations/$deco" "$HOME/.local/share/aurorae/themes/"
             ok "$deco -> ~/.local/share/aurorae/themes/$deco"
@@ -1232,13 +1442,15 @@ deploy_loose_files() {
 
     # --- Reference docs, kept out of any profile on purpose ---
     local doc="$cfg/documentation (DO NOT PUT IN FIREFOX PROFILE).txt"
-    if [[ -f "$doc" ]]; then
+    if [[ -f "$doc" ]]
+    then
         mkdir -p "$HOME/Documents/Arch Postinstall"
         cp "$doc" "$HOME/Documents/Arch Postinstall/"
         ok "Reference notes -> ~/Documents/Arch Postinstall/"
     fi
 
-    if (( INSTALL_FLOORP || INSTALL_THUNDERBIRD )); then
+    if (( INSTALL_FLOORP || INSTALL_THUNDERBIRD ))
+    then
         info "Note: a freshly installed Flatpak has no profile until you launch it once."
         info "      If something was skipped above, launch the app and re-run this script."
     fi
@@ -1246,10 +1458,13 @@ deploy_loose_files() {
 
 # ----------------------------------------------------- 10. games ------------
 
-install_games() {
+install_games()
+{
     step "10. KDE games"
-    if ask_yn "Install the KDE games (${PKGS_GAMES[*]})?"; then
-        if pac_install "${PKGS_GAMES[@]}"; then
+    if ask_yn "Install the KDE games (${PKGS_GAMES[*]})?"
+    then
+        if pac_install "${PKGS_GAMES[@]}"
+        then
             INSTALL_GAMES=1
             ok "Games installed."
         else
@@ -1262,7 +1477,8 @@ install_games() {
 
 # --------------------------------------------------- 11. dolphin ------------
 
-configure_dolphin() {
+configure_dolphin()
+{
     step "11. Dolphin settings"
     local f="$HOME/.config/dolphinrc"
 
@@ -1297,13 +1513,15 @@ configure_dolphin() {
     local ui_src="$LOOSE/Application Configurations/Dolphin/dolphinui.rc"
     local ui_dest="$HOME/.local/share/kxmlgui5/dolphin"
 
-    if [[ -z "${LOOSE:-}" || ! -f "$ui_src" ]]; then
+    if [[ -z "${LOOSE:-}" || ! -f "$ui_src" ]]
+    then
         warn "dolphinui.rc not in the payload; toolbar left at its defaults."
         return 0
     fi
 
     mkdir -p "$ui_dest"
-    if cp -f "$ui_src" "$ui_dest/dolphinui.rc"; then
+    if cp -f "$ui_src" "$ui_dest/dolphinui.rc"
+    then
         ok "Dolphin toolbar and menu layout applied."
     else
         fail "Could not write $ui_dest/dolphinui.rc."
@@ -1312,7 +1530,8 @@ configure_dolphin() {
 
 # ------------------------------------------- 12. default image viewer -------
 
-configure_default_image_viewer() {
+configure_default_image_viewer()
+{
     # koko is the package name; its menu name has changed before, so take it
     # from the .desktop file rather than assuming.
     local app
@@ -1320,7 +1539,8 @@ configure_default_image_viewer() {
 
     step "12. Default image viewer ($app)"
 
-    if ! pacman -Qq koko >/dev/null 2>&1; then
+    if ! pacman -Qq koko >/dev/null 2>&1
+    then
         fail "koko is not installed; leaving the image associations alone."
         return 1
     fi
@@ -1328,7 +1548,8 @@ configure_default_image_viewer() {
     local f="$HOME/.config/mimeapps.list" t
     mkdir -p "$(dirname "$f")"
 
-    for t in "${KOKO_IMAGE_TYPES[@]}"; do
+    for t in "${KOKO_IMAGE_TYPES[@]}"
+    do
         kwriteconfig6 --file "$f" --group "Default Applications" --key "$t" "$KOKO_DESKTOP;"
     done
 
@@ -1341,7 +1562,8 @@ configure_default_image_viewer() {
 
 # ------------------------------------------- light / dark mode + appearance --
 
-choose_theme_mode() {
+choose_theme_mode()
+{
     step "13. Light or dark mode"
     echo
     info "  1) Dark  -- Breeze Dark, dark icons, Willow Dark window decorations"
@@ -1372,18 +1594,21 @@ choose_theme_mode() {
 }
 
 # Step 13 is the prompt plus the apply, as one unit.
-run_theme_mode() {
+run_theme_mode()
+{
     choose_theme_mode
     apply_theme_mode
 }
 
-apply_theme_mode() {
+apply_theme_mode()
+{
     info "Applying the ${THEME_MODE} theme..."
 
     # -a applies appearance only; --resetLayout (which would wipe the panels)
     # is deliberately not passed.
     if command -v plasma-apply-lookandfeel >/dev/null \
-       && plasma-apply-lookandfeel -a "$LOOKANDFEEL" >/dev/null 2>&1; then
+       && plasma-apply-lookandfeel -a "$LOOKANDFEEL" >/dev/null 2>&1
+    then
         ok "Global theme set to $LOOKANDFEEL."
     else
         # No Plasma session (or the tool is missing) -- write the config directly.
@@ -1392,7 +1617,8 @@ apply_theme_mode() {
     fi
 
     if command -v plasma-apply-colorscheme >/dev/null \
-       && plasma-apply-colorscheme "$COLORSCHEME" -a "$ACCENT_COLOR" >/dev/null 2>&1; then
+       && plasma-apply-colorscheme "$COLORSCHEME" -a "$ACCENT_COLOR" >/dev/null 2>&1
+    then
         ok "Color scheme set to $COLORSCHEME (accent $ACCENT_COLOR)."
     else
         kw "$HOME/.config/kdeglobals" General ColorScheme "$COLORSCHEME"
@@ -1412,8 +1638,10 @@ apply_theme_mode() {
 PLASMALOGIN_USER="plasmalogin"
 PLASMALOGIN_HOME="/var/lib/plasmalogin"
 
-apply_login_manager_theme() {
-    if ! id -u "$PLASMALOGIN_USER" >/dev/null 2>&1; then
+apply_login_manager_theme()
+{
+    if ! id -u "$PLASMALOGIN_USER" >/dev/null 2>&1
+    then
         warn "No '$PLASMALOGIN_USER' user -- Plasma Login Manager isn't installed."
         warn "The login screen keeps its own theme. Install plasma-login-manager,"
         warn "then re-run this script to theme it."
@@ -1421,7 +1649,8 @@ apply_login_manager_theme() {
     fi
 
     if ! sudo install -d -o "$PLASMALOGIN_USER" -g "$PLASMALOGIN_USER" -m 0750 \
-            "$PLASMALOGIN_HOME/.config"; then
+            "$PLASMALOGIN_HOME/.config"
+    then
         fail "Could not create $PLASMALOGIN_HOME/.config."
         return 1
     fi
@@ -1441,7 +1670,8 @@ LookAndFeelPackage=$LOOKANDFEEL
 EOF
 
     if sudo install -o "$PLASMALOGIN_USER" -g "$PLASMALOGIN_USER" -m 0644 \
-            "$tmp" "$PLASMALOGIN_HOME/.config/kdeglobals"; then
+            "$tmp" "$PLASMALOGIN_HOME/.config/kdeglobals"
+    then
         ok "Login screen set to $COLORSCHEME."
     else
         fail "Could not theme the login screen."
@@ -1450,11 +1680,13 @@ EOF
 
 # ---------------------------------------------------- 14. cursor ------------
 
-configure_cursor() {
+configure_cursor()
+{
     step "14. Cursor theme (Breeze Light)"
     pac_install breeze-cursors >/dev/null 2>&1
 
-    if [[ ! -d /usr/share/icons/Breeze_Light && ! -d "$HOME/.local/share/icons/Breeze_Light" ]]; then
+    if [[ ! -d /usr/share/icons/Breeze_Light && ! -d "$HOME/.local/share/icons/Breeze_Light" ]]
+    then
         fail "Breeze_Light cursor theme not found on disk."
         return 1
     fi
@@ -1464,7 +1696,8 @@ configure_cursor() {
     mkdir -p "$HOME/.icons/default"
     printf '[Icon Theme]\nInherits=Breeze_Light\n' > "$HOME/.icons/default/index.theme"
 
-    if command -v plasma-apply-cursortheme >/dev/null; then
+    if command -v plasma-apply-cursortheme >/dev/null
+    then
         plasma-apply-cursortheme Breeze_Light >/dev/null 2>&1 \
             && ok "Cursor theme applied live." \
             || ok "Cursor theme set (takes effect after logout)."
@@ -1475,13 +1708,16 @@ configure_cursor() {
 
 # ---------------------------------------- 15. window decorations ------------
 
-configure_decorations() {
+configure_decorations()
+{
     # Running this on its own (--only decorations) means no light/dark choice
     # was made, so take it from the look-and-feel already in use.
-    if (( ! THEME_CHOSEN )); then
+    if (( ! THEME_CHOSEN ))
+    then
         local laf
         laf="$(kreadconfig6 --file kdeglobals --group KDE --key LookAndFeelPackage 2>/dev/null)"
-        if [[ -n "$laf" && "$laf" != *dark* ]]; then
+        if [[ -n "$laf" && "$laf" != *dark* ]]
+        then
             DECORATION_THEME="WillowLight"
         else
             DECORATION_THEME="WillowDark"
@@ -1491,7 +1727,8 @@ configure_decorations() {
     step "15. Window decorations ($DECORATION_THEME)"
     local theme_dir="$HOME/.local/share/aurorae/themes/$DECORATION_THEME"
 
-    if [[ ! -d "$theme_dir" ]]; then
+    if [[ ! -d "$theme_dir" ]]
+    then
         fail "$DECORATION_THEME aurorae theme is missing; skipping."
         return 1
     fi
@@ -1510,9 +1747,11 @@ configure_decorations() {
 
 # -------------------------------------------------- 16. printing ------------
 
-setup_printing() {
+setup_printing()
+{
     step "16. Printing (CUPS)"
-    if pac_install "${PKGS_PRINT[@]}"; then
+    if pac_install "${PKGS_PRINT[@]}"
+    then
         ok "Print packages installed."
     else
         fail "Some print packages failed to install."
@@ -1524,7 +1763,8 @@ setup_printing() {
         && ok "cups.service enabled." || fail "Could not enable cups.service"
 
     # Needed for automatic discovery of network printers.
-    if pacman -Qq avahi >/dev/null 2>&1 || pac_install avahi >/dev/null 2>&1; then
+    if pacman -Qq avahi >/dev/null 2>&1 || pac_install avahi >/dev/null 2>&1
+    then
         sudo systemctl enable --now avahi-daemon.service >/dev/null 2>&1 \
             && ok "avahi-daemon enabled (network printer discovery)."
     fi
@@ -1537,9 +1777,11 @@ setup_printing() {
 
 # ---------------------------------------------- 17. spellchecker ------------
 
-setup_spellcheck() {
+setup_spellcheck()
+{
     step "17. Spell checking (Sonnet + Hunspell)"
-    if pac_install "${PKGS_SPELL[@]}"; then
+    if pac_install "${PKGS_SPELL[@]}"
+    then
         ok "Spell-check packages installed."
     else
         fail "Spell-check packages failed to install."
@@ -1562,12 +1804,14 @@ setup_spellcheck() {
 
 # ------------------------------------------ 18. panels + systray ------------
 
-configure_panels() {
+configure_panels()
+{
     step "18. Panels and system tray on every monitor"
 
     local qdbus_cmd=""
     for c in qdbus6 qdbus qdbus-qt6; do command -v "$c" >/dev/null && { qdbus_cmd="$c"; break; }; done
-    if [[ -z "$qdbus_cmd" ]] || ! "$qdbus_cmd" org.kde.plasmashell >/dev/null 2>&1; then
+    if [[ -z "$qdbus_cmd" ]] || ! "$qdbus_cmd" org.kde.plasmashell >/dev/null 2>&1
+    then
         warn "Plasma isn't running (or qdbus is unavailable)."
         warn "Log into your Plasma session and re-run this script to set up the panels."
         return 1
@@ -1671,7 +1915,8 @@ JS_EOF
 
     local result
     if result="$("$qdbus_cmd" org.kde.plasmashell /PlasmaShell \
-                 org.kde.PlasmaShell.evaluateScript "$js" 2>&1)"; then
+                 org.kde.PlasmaShell.evaluateScript "$js" 2>&1)"
+    then
         ok "Panels rebuilt (${result:-done})."
         info "Screens narrower than ${min_width}px were skipped."
         info "Pinned launchers were left alone (fresh panels start with the defaults)."
@@ -1682,12 +1927,15 @@ JS_EOF
 
 # ------------------------------------------------------ 19. wine ------------
 
-install_wine() {
+install_wine()
+{
     step "19. Wine"
     # Wine needs the multilib repo for its 32-bit halves.
-    if ! grep -qE '^\[multilib\]' /etc/pacman.conf; then
+    if ! grep -qE '^\[multilib\]' /etc/pacman.conf
+    then
         warn "The [multilib] repository is not enabled in /etc/pacman.conf."
-        if ask_yn "Enable [multilib] now (needed for 32-bit Wine support)?" y; then
+        if ask_yn "Enable [multilib] now (needed for 32-bit Wine support)?" y
+        then
             sudo cp /etc/pacman.conf "/etc/pacman.conf.bak.$(date +%Y%m%d%H%M%S)"
             sudo sed -i '/^#\[multilib\]/,/^#Include = \/etc\/pacman.d\/mirrorlist/ s/^#//' /etc/pacman.conf
             sudo pacman -Syu --noconfirm >/dev/null
@@ -1697,7 +1945,8 @@ install_wine() {
         fi
     fi
 
-    if pac_install "${PKGS_WINE[@]}"; then
+    if pac_install "${PKGS_WINE[@]}"
+    then
         ok "Wine installed."
     else
         fail "Wine install failed."
@@ -1706,24 +1955,29 @@ install_wine() {
 
 # ---------------------------------------------- 20. office suite ------------
 
-install_office() {
+install_office()
+{
     step "20. Office suite"
     local picks=() n
 
     ask_multi "${OFFICE_NAMES[@]}"
-    for n in "${SELECTED[@]}"; do
+    for n in "${SELECTED[@]}"
+    do
         picks+=( "${OFFICE_IDS[$((n - 1))]}" )
     done
 
-    if (( ${#picks[@]} == 0 )); then
+    if (( ${#picks[@]} == 0 ))
+    then
         info "No office suite selected."
         return 0
     fi
 
-    if flatpak_install "${picks[@]}"; then
+    if flatpak_install "${picks[@]}"
+    then
         ok "Installed: ${picks[*]}"
         # Make LibreOffice use the Qt6 VCL plugin so it matches the Plasma theme.
-        if [[ " ${picks[*]} " == *" org.libreoffice.LibreOffice "* ]]; then
+        if [[ " ${picks[*]} " == *" org.libreoffice.LibreOffice "* ]]
+        then
             sudo flatpak override --system --env=SAL_USE_VCLPLUGIN=qt6 org.libreoffice.LibreOffice \
                 && ok "LibreOffice set to use the Qt6 look."
         fi
@@ -1734,23 +1988,27 @@ install_office() {
 
 # ------------------------------------------------------------- summary ------
 
-summary() {
+summary()
+{
     step "Done"
-    if (( ${#FAILURES[@]} )); then
+    if (( ${#FAILURES[@]} ))
+    then
         err "${#FAILURES[@]} step(s) reported a problem:"
         local f
         for f in "${FAILURES[@]}"; do err "  - $f"; done
     else
         ok "Everything completed without errors."
     fi
-    if (( ${#RUN_STEPS[@]} != ${#STEPS[@]} )); then
+    if (( ${#RUN_STEPS[@]} != ${#STEPS[@]} ))
+    then
         echo
         info "This was a partial run (${#RUN_STEPS[@]} of ${#STEPS[@]} steps)."
         info "Run without --only/--skip to do everything."
     fi
 
     local body
-    if (( ${#FAILURES[@]} )); then
+    if (( ${#FAILURES[@]} ))
+    then
         body="Finished with ${#FAILURES[@]} problem(s) -- check the terminal. Reboot when you have looked them over."
     else
         body="All ${#RUN_STEPS[@]} steps completed. Reboot to finish applying the changes."
@@ -1768,7 +2026,8 @@ summary() {
 
 # --------------------------------------------- 21. application menu ---------
 
-tidy_application_menu() {
+tidy_application_menu()
+{
     step "21. Application menu cleanup"
 
     echo
@@ -1776,7 +2035,8 @@ tidy_application_menu() {
     info "menu that are rarely useful on a desktop:"
     echo
     local entry file label
-    for entry in "${MENU_HIDE[@]}"; do
+    for entry in "${MENU_HIDE[@]}"
+    do
         info "    - ${entry#*|}"
     done
     echo
@@ -1784,7 +2044,8 @@ tidy_application_menu() {
     info "installed and still work from a terminal or via \"Open with\"."
     echo
 
-    if ! ask_yn "Hide these entries from the application menu?"; then
+    if ! ask_yn "Hide these entries from the application menu?"
+    then
         info "Skipped."
         return 0
     fi
@@ -1793,18 +2054,21 @@ tidy_application_menu() {
     mkdir -p "$dest"
 
     local hidden=0 missing=0 src found
-    for entry in "${MENU_HIDE[@]}"; do
+    for entry in "${MENU_HIDE[@]}"
+    do
         file="${entry%%|*}"
         label="${entry#*|}"
 
         found=""
         for src in "/usr/share/applications/$file" \
                    "/usr/local/share/applications/$file" \
-                   "/var/lib/flatpak/exports/share/applications/$file"; do
+                   "/var/lib/flatpak/exports/share/applications/$file"
+        do
             [[ -f "$src" ]] && { found="$src"; break; }
         done
 
-        if [[ -z "$found" ]]; then
+        if [[ -z "$found" ]]
+        then
             (( missing++ ))
             continue
         fi
@@ -1813,7 +2077,8 @@ tidy_application_menu() {
         # rest -- a stub would replace the entry outright, not just hide it.
         if cp -f "$found" "$dest/$file" \
            && kwriteconfig6 --file "$dest/$file" --group "Desktop Entry" \
-                            --key NoDisplay true; then
+                            --key NoDisplay true
+        then
             (( hidden++ ))
         else
             fail "Could not hide $label."
@@ -1834,9 +2099,11 @@ tidy_application_menu() {
 # ---------------------------------------------- 22. trash on the desktop ----
 
 # Echo a user's Desktop directory, honouring XDG_DESKTOP_DIR when they have one.
-user_desktop_dir() {
+user_desktop_dir()
+{
     local home="$1" dir=""
-    if sudo test -r "$home/.config/user-dirs.dirs"; then
+    if sudo test -r "$home/.config/user-dirs.dirs"
+    then
         dir="$(sudo awk -F= '/^[[:space:]]*XDG_DESKTOP_DIR/ {
                    gsub(/"/, "", $2); print $2; exit }' \
                "$home/.config/user-dirs.dirs" 2>/dev/null)"
@@ -1846,11 +2113,13 @@ user_desktop_dir() {
     printf '%s\n' "$dir"
 }
 
-add_trash_to_desktops() {
+add_trash_to_desktops()
+{
     step "22. Trash icon on the desktop"
 
     local uid_min=1000 uid_max=60000 v
-    if [[ -r /etc/login.defs ]]; then
+    if [[ -r /etc/login.defs ]]
+    then
         v="$(awk '/^UID_MIN/ {print $2; exit}' /etc/login.defs)"; [[ -n "$v" ]] && uid_min="$v"
         v="$(awk '/^UID_MAX/ {print $2; exit}' /etc/login.defs)"; [[ -n "$v" ]] && uid_max="$v"
     fi
@@ -1868,10 +2137,12 @@ EOF
     local user uid home shell grp desktop
     local added=0 already=0 skipped=0
 
-    while IFS=: read -r user _ uid _ _ home shell; do
+    while IFS=: read -r user _ uid _ _ home shell
+    do
         (( uid >= uid_min && uid <= uid_max )) || continue
         case "$shell" in */nologin|*/false|"") continue ;; esac
-        if [[ ! -d "$home" ]]; then
+        if [[ ! -d "$home" ]]
+        then
             warn "$user: no home directory at $home -- skipped."
             (( skipped++ )); continue
         fi
@@ -1879,22 +2150,26 @@ EOF
         desktop="$(user_desktop_dir "$home")"
         grp="$(id -gn "$user" 2>/dev/null)" || grp="$user"
 
-        if sudo test -e "$desktop/$TRASH_DESKTOP_NAME"; then
+        if sudo test -e "$desktop/$TRASH_DESKTOP_NAME"
+        then
             info "$user: already has a Trash icon."
             (( already++ )); continue
         fi
 
         # Only create the folder when it is genuinely missing, so an existing
         # one keeps its own ownership and mode.
-        if ! sudo test -d "$desktop"; then
-            if ! sudo install -d -o "$user" -g "$grp" -m 0755 "$desktop"; then
+        if ! sudo test -d "$desktop"
+        then
+            if ! sudo install -d -o "$user" -g "$grp" -m 0755 "$desktop"
+            then
                 fail "$user: could not create $desktop."
                 (( skipped++ )); continue
             fi
         fi
 
         if sudo install -o "$user" -g "$grp" -m 0644 \
-                "$tmp" "$desktop/$TRASH_DESKTOP_NAME"; then
+                "$tmp" "$desktop/$TRASH_DESKTOP_NAME"
+        then
             ok "$user: Trash icon added to ${desktop}."
             (( added++ ))
         else
@@ -1908,14 +2183,17 @@ EOF
     # New accounts have their home seeded from /etc/skel, so seed that too.
     # These files stay root-owned; useradd reassigns them when it copies them.
     local skel="/etc/skel/Desktop"
-    if sudo test -e "$skel/$TRASH_DESKTOP_NAME"; then
+    if sudo test -e "$skel/$TRASH_DESKTOP_NAME"
+    then
         info "/etc/skel already has a Trash icon."
     else
-        if ! sudo test -d "$skel" && ! sudo install -d -m 0755 "$skel"; then
+        if ! sudo test -d "$skel" && ! sudo install -d -m 0755 "$skel"
+        then
             fail "Could not create $skel."
             return 0
         fi
-        if sudo install -m 0644 "$tmp" "$skel/$TRASH_DESKTOP_NAME"; then
+        if sudo install -m 0644 "$tmp" "$skel/$TRASH_DESKTOP_NAME"
+        then
             ok "/etc/skel seeded, so new accounts get the icon too."
         else
             fail "Could not add the Trash icon to /etc/skel."
@@ -1925,19 +2203,22 @@ EOF
 
 # ---------------------------------------------------------------- main ------
 
-main() {
+main()
+{
     parse_args "$@"
     show_intro
 
     preflight
 
     # Steps 9 and 11 are the ones that read files out of the payload.
-    if step_selected 9 || step_selected 11; then
+    if step_selected 9 || step_selected 11
+    then
         fetch_payload
     fi
 
     local n fn
-    for n in "${RUN_STEPS[@]}"; do
+    for n in "${RUN_STEPS[@]}"
+    do
         fn="$(step_field "$n" fn)"
         "$fn"
     done
