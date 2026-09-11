@@ -1,4 +1,4 @@
-# nicks-arch-postinstall-script
+# Nick's Arch Linux Postinstall Script
 
 Post-install setup for a fresh Arch Linux + KDE Plasma machine.
 
