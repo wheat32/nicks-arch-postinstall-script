@@ -34,29 +34,31 @@ Set `REPO_BRANCH=somebranch` to pull the payload from a different branch.
 |---|------|
 | 1 | Adds the Chaotic-AUR repository, if it isn't already configured |
 | 2 | Runs a full `pacman -Syu` |
-| 3 | Installs `bluez`/`bluez-utils`, enables and starts `bluetooth.service` |
-| 4 | If more than one kernel is installed, points GRUB (or systemd-boot) at the newest one |
-| 5 | Installs the KDE/Plasma package set, Discover, Flatpak and the XDG portals; adds Flathub; removes superseded packages; makes Plasma Login Manager the display manager |
-| 6 | Asks which browsers you want (Floorp / Firefox / Ungoogled Chromium / Brave), installs them as Flatpaks, and grants Floorp read/write access to `$HOME` |
-| 7 | Asks whether to install Thunderbird |
-| 8 | Deploys the `loose/` files (`userChrome.css` per browser profile, both Willow themes, reference notes) |
-| 9 | Asks whether to install the KDE games |
-| 10 | Writes the Dolphin settings |
-| 11 | Asks for light or dark mode, then applies the global theme, color scheme and icons |
-| 12 | Sets the Breeze Light cursor theme |
-| 13 | Installs both Willow decorations and applies the one matching your light/dark choice |
-| 14 | Installs the CUPS/foomatic/gutenprint stack and enables `cups.socket` + `cups.service` |
-| 15 | Installs Hunspell/Aspell/Enchant and configures Sonnet for `en_US` |
-| 16 | Rebuilds an identical panel + system tray on every monitor at least 1024px wide |
-| 17 | Installs Wine (offering to enable `[multilib]` first) |
-| 18 | Asks which office suites you want (LibreOffice / Collabora Office), same numbered selection as the browsers |
+| 3 | Offers to install an AUR helper (yay or paru), unless one is already there |
+| 4 | Installs `bluez`/`bluez-utils`, enables and starts `bluetooth.service` |
+| 5 | If more than one kernel is installed, points GRUB (or systemd-boot) at the newest one |
+| 6 | Installs the KDE/Plasma package set, Discover, Flatpak and the XDG portals; adds Flathub; removes superseded packages; makes Plasma Login Manager the display manager |
+| 7 | Asks which browsers you want (Floorp / Firefox / Ungoogled Chromium / Brave), installs them as Flatpaks, and grants Floorp read/write access to `$HOME` |
+| 8 | Asks whether to install Thunderbird |
+| 9 | Deploys the `loose/` files (`userChrome.css` per browser profile, both Willow themes, reference notes) |
+| 10 | Asks whether to install the KDE games |
+| 11 | Writes the Dolphin settings |
+| 12 | Makes Photos (`koko`) the default image viewer |
+| 13 | Asks for light or dark mode, then applies the global theme, color scheme and icons |
+| 14 | Sets the Breeze Light cursor theme |
+| 15 | Installs both Willow decorations and applies the one matching your light/dark choice |
+| 16 | Installs the CUPS/foomatic/gutenprint stack and enables `cups.socket` + `cups.service` |
+| 17 | Installs Hunspell/Aspell/Enchant and configures Sonnet for `en_US` |
+| 18 | Rebuilds an identical panel + system tray on every monitor at least 1024px wide |
+| 19 | Installs Wine (offering to enable `[multilib]` first) |
+| 20 | Asks which office suites you want (LibreOffice / Collabora Office), same numbered selection as the browsers |
 
 It is safe to re-run: package installs use `--needed` and config writes are
 idempotent.
 
 ## Notes
 
-- **Step 4 touches GRUB as little as possible.** It first reads the existing
+- **Step 5 touches GRUB as little as possible.** It first reads the existing
   menu and works out which kernel the current `GRUB_DEFAULT` actually boots —
   numeric (`0`), nested numeric (`1>2`), menuentry-id and `saved` forms are all
   understood. If that is already the newest kernel, it changes nothing at all
@@ -69,10 +71,10 @@ idempotent.
   `/etc/default/grub` and `/boot/grub/grub.cfg` are backed up to
   `.bak.<timestamp>` first, and if the regenerated menu has lost its
   `background_image`/`set theme=` lines the backup is restored automatically.
-- **Step 8** can only place `userChrome.css` in a profile that already exists.
+- **Step 9** can only place `userChrome.css` in a profile that already exists.
   A freshly installed Flatpak has no profile until you launch it once — if the
   script reports a skip, start the app and re-run.
-- **Step 16** needs a running Plasma session. It deletes the existing panels and
+- **Step 18** needs a running Plasma session. It deletes the existing panels and
   recreates one per screen, so pinned launchers go back to the defaults. The
   layout is copied from the main monitor (the ASUS XG27ACDNG on DP-4):
   bottom, left-aligned, floating, adaptive opacity, `holidaysevents`
@@ -95,7 +97,7 @@ idempotent.
 - The **cursor is Breeze Light in both modes**, by design — it does not follow
   the light/dark choice.
 - **Plasma Login Manager, not SDDM.** `plasma-login-manager` is installed as
-  part of step 5 and enabled as the display manager; `sddm-kcm` is not
+  part of step 6 and enabled as the display manager; `sddm-kcm` is not
   installed. Only one unit can hold the `display-manager.service` alias, so any
   existing display manager is disabled first — and if enabling fails, the
   previous one is put back so the machine is never left without a login screen.
@@ -128,4 +130,15 @@ idempotent.
 
 [photos]: https://pointieststick.com/2026/09/06/photos-a-proposed-replacement-for-gwenview/
 
+- **An AUR helper is offered, not assumed.** If `yay` or `paru` is already
+  installed the step is skipped. Otherwise you pick one or neither — never
+  both. Both live in Chaotic-AUR, so this is a normal `pacman` install; if the
+  repository isn't available the step falls back to building from the AUR with
+  `git` + `makepkg`.
+- **Photos as the default image viewer.** The Default Applications KCM keys its
+  *Multimedia → Image viewer* dropdown off `image/png` alone, so that entry is
+  written to both `[Added Associations]` and `[Default Applications]` in
+  `~/.config/mimeapps.list` — which is what makes System Settings read
+  "Photos". The other image types Photos handles are set as defaults too, so
+  every image actually opens in it. Video types it also claims are left alone.
 - `cups-browsed` is installed but left disabled, matching the reference system.

@@ -138,6 +138,22 @@ PKGS_SPELL=( hunspell hunspell-en_us aspell enchant )
 
 PKGS_WINE=( wine wine-mono winetricks )
 
+# AUR helpers offered in step 3. Both are in Chaotic-AUR, so they install with
+# plain pacman once step 1 has run; only one (or neither) may be chosen.
+AUR_HELPERS=( yay paru )
+
+# Photos' desktop file. The Default Applications KCM keys its "Image viewer"
+# dropdown off image/png alone, so that entry is what makes System Settings
+# read "Photos"; the rest are set so every image type actually opens in it.
+KOKO_DESKTOP="org.kde.koko.desktop"
+KOKO_IMAGE_TYPES=(
+    image/png image/jpeg image/gif image/bmp image/tiff
+    image/webp image/x-webp image/avif image/avif-sequence image/heif
+    image/svg+xml image/x-eps image/x-icns image/x-ico image/x-psd
+    image/x-portable-bitmap image/x-portable-graymap image/x-portable-pixmap
+    image/x-xbitmap image/x-xpixmap
+)
+
 # Browsers offered in step 4: menu number -> flatpak id
 BROWSER_IDS=(
     "one.ablaze.floorp"
@@ -207,22 +223,24 @@ show_intro() {
 
      1.  Add the Chaotic-AUR repository
      2.  Fully update the system
-     3.  Enable and start Bluetooth
-     4.  Point the bootloader at the newest installed kernel
-     5.  Install the KDE/Plasma packages, Discover, Flatpak and XDG portals
-     6.  Install the browsers you pick, as Flatpaks
-     7.  Install Thunderbird, if you want it
-     8.  Drop the userChrome.css files and window decorations into place
-     9.  Install the KDE games, if you want them
-    10.  Apply your Dolphin settings
-    11.  Apply light or dark mode
-    12.  Set the Breeze Light cursor
-    13.  Apply the Willow window decorations
-    14.  Install and enable printing (CUPS, foomatic, gutenprint)
-    15.  Install Hunspell and configure spell checking for en_US
-    16.  Rebuild a matching panel and system tray on every monitor
-    17.  Install Wine
-    18.  Install an office suite, if you want one
+     3.  Install an AUR helper, if you want one
+     4.  Enable and start Bluetooth
+     5.  Point the bootloader at the newest installed kernel
+     6.  Install the KDE/Plasma packages, Discover, Flatpak and XDG portals
+     7.  Install the browsers you pick, as Flatpaks
+     8.  Install Thunderbird, if you want it
+     9.  Drop the userChrome.css files and window decorations into place
+    10.  Install the KDE games, if you want them
+    11.  Apply your Dolphin settings
+    12.  Make Photos the default image viewer
+    13.  Apply light or dark mode
+    14.  Set the Breeze Light cursor
+    15.  Apply the Willow window decorations
+    16.  Install and enable printing (CUPS, foomatic, gutenprint)
+    17.  Install Hunspell and configure spell checking for en_US
+    18.  Rebuild a matching panel and system tray on every monitor
+    19.  Install Wine
+    20.  Install an office suite, if you want one
 
   You will be asked about:
 
@@ -230,6 +248,7 @@ show_intro() {
     - Thunderbird
     - The KDE games
     - Light or dark mode
+    - An AUR helper: yay, paru, or neither
     - Which office suites you want (LibreOffice, Collabora Office)
 
   Worth knowing before you start:
@@ -403,10 +422,64 @@ system_update() {
     fi
 }
 
+# ------------------------------------------------------- 3. AUR helper ------
+
+install_aur_helper() {
+    step "3. AUR helper"
+
+    local h
+    for h in "${AUR_HELPERS[@]}"; do
+        if pacman -Qq "$h" >/dev/null 2>&1 || command -v "$h" >/dev/null 2>&1; then
+            ok "$h is already installed; nothing to do."
+            return 0
+        fi
+    done
+
+    echo
+    info "  1) yay"
+    info "  2) paru"
+    echo
+    info "Pick one, or leave blank for neither."
+    local choice pick=""
+    read -r -p "    Selection: " choice </dev/tty
+
+    case "${choice// /}" in
+        1|yay)  pick="yay"  ;;
+        2|paru) pick="paru" ;;
+        "")     info "No AUR helper selected."; return 0 ;;
+        *)      warn "Unrecognized choice '$choice' -- skipping."; return 0 ;;
+    esac
+
+    # Chaotic-AUR carries both, so this is a normal package install if step 1
+    # succeeded.
+    if pacman -Si "$pick" >/dev/null 2>&1; then
+        if pac_install "$pick"; then
+            ok "$pick installed."
+        else
+            fail "Could not install $pick."
+        fi
+        return 0
+    fi
+
+    # Otherwise fall back to building it from the AUR by hand.
+    warn "$pick is not in any configured repository; building it from the AUR."
+    if ! pac_install git base-devel; then
+        fail "Could not install git/base-devel; skipping $pick."
+        return 1
+    fi
+    local src="$WORKDIR/$pick"
+    if git clone --depth 1 "https://aur.archlinux.org/${pick}.git" "$src" >/dev/null 2>&1 \
+       && ( cd "$src" && makepkg -si --noconfirm >/dev/null 2>&1 ); then
+        ok "$pick built and installed."
+    else
+        fail "Could not build $pick from the AUR."
+    fi
+}
+
 # ------------------------------------------------------- 1. bluetooth -------
 
 setup_bluetooth() {
-    step "3. Bluetooth"
+    step "4. Bluetooth"
     pac_install bluez bluez-utils || fail "bluez install failed"
     if sudo systemctl enable --now bluetooth.service; then
         ok "bluetooth.service enabled and started."
@@ -614,7 +687,7 @@ setup_sdboot_default() {
 }
 
 setup_bootloader() {
-    step "4. Default boot kernel"
+    step "5. Default boot kernel"
 
     local count ver img pkgbase kver v i b k
     count="$(list_kernels | wc -l)"
@@ -645,7 +718,7 @@ setup_bootloader() {
 # ---------------------------------------------------- 3. base packages ------
 
 install_base_packages() {
-    step "5. Core packages (KDE, Plasma, Discover, Flatpak, portals)"
+    step "6. Core packages (KDE, Plasma, Discover, Flatpak, portals)"
     info "Installing ${#PKGS_BASE[@]} packages -- this takes a while."
     if pac_install "${PKGS_BASE[@]}"; then
         ok "Core packages installed."
@@ -720,7 +793,7 @@ setup_login_manager() {
 # ------------------------------------------------ 4/5. browsers + Floorp ----
 
 install_browsers() {
-    step "6. Browsers (Flatpak)"
+    step "7. Browsers (Flatpak)"
     local chosen=() n id
 
     ask_multi "${BROWSER_NAMES[@]}"
@@ -751,7 +824,7 @@ install_browsers() {
 # ------------------------------------------------------ 6. Thunderbird ------
 
 install_thunderbird() {
-    step "7. Thunderbird"
+    step "8. Thunderbird"
     if ask_yn "Install Thunderbird (Flatpak)?"; then
         if flatpak_install org.mozilla.Thunderbird; then
             INSTALL_THUNDERBIRD=1
@@ -830,7 +903,7 @@ deploy_userchrome() {
 }
 
 deploy_loose_files() {
-    step "8. Deploying the loose/ configuration files"
+    step "9. Deploying the loose/ configuration files"
     local cfg="$LOOSE/Application Configurations"
 
     # --- Floorp (Flatpak) ---
@@ -887,7 +960,7 @@ deploy_loose_files() {
 # ----------------------------------------------------------- 8. games -------
 
 install_games() {
-    step "9. KDE games"
+    step "10. KDE games"
     if ask_yn "Install the KDE games (${PKGS_GAMES[*]})?"; then
         if pac_install "${PKGS_GAMES[@]}"; then
             INSTALL_GAMES=1
@@ -903,7 +976,7 @@ install_games() {
 # ---------------------------------------------------------- 9. dolphin ------
 
 configure_dolphin() {
-    step "10. Dolphin settings"
+    step "11. Dolphin settings"
     local f="$HOME/.config/dolphinrc"
 
     kw "$f" DetailsMode IconSize 32
@@ -923,10 +996,34 @@ configure_dolphin() {
     ok "dolphinrc written."
 }
 
+# ------------------------------------------- 12. default image viewer -------
+
+configure_default_image_viewer() {
+    step "12. Default image viewer (Photos)"
+
+    if ! pacman -Qq koko >/dev/null 2>&1; then
+        fail "koko is not installed; leaving the image associations alone."
+        return 1
+    fi
+
+    local f="$HOME/.config/mimeapps.list" t
+    mkdir -p "$(dirname "$f")"
+
+    for t in "${KOKO_IMAGE_TYPES[@]}"; do
+        kwriteconfig6 --file "$f" --group "Default Applications" --key "$t" "$KOKO_DESKTOP;"
+    done
+
+    # Matches what the KCM itself writes, so System Settings ->
+    # Default Applications -> Multimedia shows "Image viewer: Photos".
+    kwriteconfig6 --file "$f" --group "Added Associations" --key "image/png" "$KOKO_DESKTOP;"
+
+    ok "Photos set as the default image viewer."
+}
+
 # ------------------------------------------- light / dark mode + appearance --
 
 choose_theme_mode() {
-    step "11. Light or dark mode"
+    step "13. Light or dark mode"
     echo
     info "  1) Dark  -- Breeze Dark, dark icons, Willow Dark window decorations"
     info "  2) Light -- Breeze Light, light icons, Willow Light window decorations"
@@ -1028,7 +1125,7 @@ EOF
 # ---------------------------------------------------------- 10. cursor ------
 
 configure_cursor() {
-    step "12. Cursor theme (Breeze Light)"
+    step "14. Cursor theme (Breeze Light)"
     pac_install breeze-cursors >/dev/null 2>&1
 
     if [[ ! -d /usr/share/icons/Breeze_Light && ! -d "$HOME/.local/share/icons/Breeze_Light" ]]; then
@@ -1053,7 +1150,7 @@ configure_cursor() {
 # ----------------------------------------------- 11. window decorations -----
 
 configure_decorations() {
-    step "13. Window decorations ($DECORATION_THEME)"
+    step "15. Window decorations ($DECORATION_THEME)"
     local theme_dir="$HOME/.local/share/aurorae/themes/$DECORATION_THEME"
 
     if [[ ! -d "$theme_dir" ]]; then
@@ -1076,7 +1173,7 @@ configure_decorations() {
 # ---------------------------------------------------------- 12. printing ----
 
 setup_printing() {
-    step "14. Printing (CUPS)"
+    step "16. Printing (CUPS)"
     if pac_install "${PKGS_PRINT[@]}"; then
         ok "Print packages installed."
     else
@@ -1103,7 +1200,7 @@ setup_printing() {
 # ------------------------------------------------------ 13. spellchecker ----
 
 setup_spellcheck() {
-    step "15. Spell checking (Sonnet + Hunspell)"
+    step "17. Spell checking (Sonnet + Hunspell)"
     if pac_install "${PKGS_SPELL[@]}"; then
         ok "Spell-check packages installed."
     else
@@ -1128,7 +1225,7 @@ setup_spellcheck() {
 # ------------------------------------------------- 14. panels + systray -----
 
 configure_panels() {
-    step "16. Panels and system tray on every monitor"
+    step "18. Panels and system tray on every monitor"
 
     local qdbus_cmd=""
     for c in qdbus6 qdbus qdbus-qt6; do command -v "$c" >/dev/null && { qdbus_cmd="$c"; break; }; done
@@ -1248,7 +1345,7 @@ JS_EOF
 # ------------------------------------------------------------ 15. wine ------
 
 install_wine() {
-    step "17. Wine"
+    step "19. Wine"
     # Wine needs the multilib repo for its 32-bit halves.
     if ! grep -qE '^\[multilib\]' /etc/pacman.conf; then
         warn "The [multilib] repository is not enabled in /etc/pacman.conf."
@@ -1272,7 +1369,7 @@ install_wine() {
 # ------------------------------------------------------ 16. office suite ----
 
 install_office() {
-    step "18. Office suite"
+    step "20. Office suite"
     local picks=() n
 
     ask_multi "${OFFICE_NAMES[@]}"
@@ -1321,25 +1418,27 @@ main() {
     preflight
     fetch_payload
 
-    setup_chaotic_aur      # 1
-    system_update          # 2
-    setup_bluetooth        # 3
-    setup_bootloader       # 4
-    install_base_packages  # 5
-    install_browsers       # 6  (also grants Floorp access to $HOME)
-    install_thunderbird    # 7
-    deploy_loose_files     # 8
-    install_games          # 9
-    configure_dolphin      # 10
-    choose_theme_mode      # 11
-    apply_theme_mode       #     (continues step 11)
-    configure_cursor       # 12
-    configure_decorations  # 13
-    setup_printing         # 14
-    setup_spellcheck       # 15
-    configure_panels       # 16
-    install_wine           # 17
-    install_office         # 18
+    setup_chaotic_aur             # 1
+    system_update                 # 2
+    install_aur_helper            # 3
+    setup_bluetooth               # 4
+    setup_bootloader              # 5
+    install_base_packages         # 6
+    install_browsers              # 7  (also grants Floorp access to $HOME)
+    install_thunderbird           # 8
+    deploy_loose_files            # 9
+    install_games                 # 10
+    configure_dolphin             # 11
+    configure_default_image_viewer # 12
+    choose_theme_mode             # 13
+    apply_theme_mode              #     (continues step 13)
+    configure_cursor              # 14
+    configure_decorations         # 15
+    setup_printing                # 16
+    setup_spellcheck              # 17
+    configure_panels              # 18
+    install_wine                  # 19
+    install_office                # 20
 
     summary
 }
