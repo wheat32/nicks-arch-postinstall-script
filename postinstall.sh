@@ -446,7 +446,7 @@ list_steps()
 # Echoes the numbers, one per line; returns 1 on anything unrecognized.
 expand_step_spec()
 {
-    local spec="$1" token lo hi n e num name rc=0
+    local spec="$1" token lo hi n e num name rc=0 _tokens=()
     IFS=',' read -ra _tokens <<< "$spec"
     for token in "${_tokens[@]}"
     do
@@ -492,22 +492,40 @@ expand_step_spec()
 
 parse_args()
 {
-    local only_spec="" skip_spec="" arg
+    local only_spec="" skip_spec="" arg only_given=0 skip_given=0
     while (( $# ))
     do
         arg="$1"
         case "$arg" in
             -h|--help)  usage; exit 0 ;;
             --list)     list_steps; exit 0 ;;
-            --only)     only_spec="${2:-}"; shift 2 || true ;;
-            --only=*)   only_spec="${arg#*=}"; shift ;;
-            --skip)     skip_spec="${2:-}"; shift 2 || true ;;
-            --skip=*)   skip_spec="${arg#*=}"; shift ;;
+            # A bare --only/--skip must be rejected: "shift 2" with one
+            # argument left shifts nothing, which would spin this loop forever.
+            --only)
+                (( $# >= 2 )) || { err "--only needs a list of steps."; exit 1; }
+                only_given=1; only_spec="$2"; shift 2 ;;
+            --only=*)   only_given=1; only_spec="${arg#*=}"; shift ;;
+            --skip)
+                (( $# >= 2 )) || { err "--skip needs a list of steps."; exit 1; }
+                skip_given=1; skip_spec="$2"; shift 2 ;;
+            --skip=*)   skip_given=1; skip_spec="${arg#*=}"; shift ;;
             *)          err "Unknown option: $arg"; echo; usage; exit 1 ;;
         esac
     done
 
-    if [[ -n "$only_spec" && -n "$skip_spec" ]]
+    # An empty value has to be an error rather than a silent full run: an
+    # unset shell variable in --only="$STEPS" would otherwise run everything.
+    if (( only_given )) && [[ -z "$only_spec" ]]
+    then
+        err "--only needs a list of steps."
+        exit 1
+    fi
+    if (( skip_given )) && [[ -z "$skip_spec" ]]
+    then
+        err "--skip needs a list of steps."
+        exit 1
+    fi
+    if (( only_given && skip_given ))
     then
         err "--only and --skip cannot be combined."
         exit 1
@@ -516,7 +534,7 @@ parse_args()
     local e n
     RUN_STEPS=()
 
-    if [[ -n "$only_spec" ]]
+    if (( only_given ))
     then
         local wanted=() expanded="" w
         expanded="$(expand_step_spec "$only_spec")" || exit 1
@@ -534,7 +552,7 @@ parse_args()
                 [[ "$n" == "$w" ]] && { RUN_STEPS+=( "$n" ); break; }
             done
         done
-    elif [[ -n "$skip_spec" ]]
+    elif (( skip_given ))
     then
         local dropped=() expanded="" w
         expanded="$(expand_step_spec "$skip_spec")" || exit 1
@@ -651,6 +669,7 @@ preflight()
         err "pacman not found -- this script is for Arch Linux."
         exit 1
     fi
+    local c
     for c in curl tar bsdtar sudo
     do
         command -v "$c" >/dev/null || { err "Missing required tool: $c"; exit 1; }
@@ -675,6 +694,10 @@ preflight()
         info "No selected step needs root; not asking for sudo."
     fi
 
+    # Steps other than the payload one use this for scratch files, so it has to
+    # exist even when fetch_payload is skipped.
+    WORKDIR="$(mktemp -d)" || { err "Could not create a temporary directory."; exit 1; }
+
     ok "Ready."
 }
 
@@ -682,7 +705,6 @@ preflight()
 fetch_payload()
 {
     step "Downloading configuration payload"
-    WORKDIR="$(mktemp -d)"
     info "Source: $TARBALL_URL"
     if ! curl -fsSL "$TARBALL_URL" -o "$WORKDIR/repo.tar.gz"
     then
@@ -969,8 +991,12 @@ grub_current_kernel()
 # silently drops them can be caught and rolled back.
 grub_decor_count()
 {
-    sudo grep -cE '^[[:space:]]*(background_image|set[[:space:]]+theme=)' \
-        /boot/grub/grub.cfg 2>/dev/null || echo 0
+    # grep -c prints 0 AND exits 1 when nothing matches, so "|| echo 0" would
+    # emit the count twice. Capture it instead and default on failure.
+    local n
+    n="$(sudo grep -cE '^[[:space:]]*(background_image|set[[:space:]]+theme=)' \
+         /boot/grub/grub.cfg 2>/dev/null)" || n=0
+    printf '%s\n' "${n:-0}"
 }
 
 setup_grub_default()
@@ -1201,6 +1227,14 @@ install_base_packages()
         else
             fail "Could not add the Flathub remote."
         fi
+
+        # /etc/profile.d/flatpak.sh adds the export dirs to XDG_DATA_DIRS, but
+        # only when a session starts. This one predates the install, so Flatpak
+        # apps stay missing from the menu (and flatpak warns about it) until
+        # the machine is restarted.
+        info "Flatpak apps will not appear in the application menu until you"
+        info "reboot. Running flatpak by hand before then warns about"
+        info "XDG_DATA_DIRS for the same reason; it is harmless."
     fi
 }
 
@@ -1526,6 +1560,36 @@ configure_dolphin()
     else
         fail "Could not write $ui_dest/dolphinui.rc."
     fi
+
+    # Which panels are shown (Places yes; Folders, Information and Terminal no)
+    # is held in the QMainWindow state blob, which KF6 keeps in the state
+    # config rather than dolphinrc. Only the blob is copied -- the window
+    # geometry keys that live beside it are specific to the machine that
+    # produced them.
+    local state_src="$LOOSE/Application Configurations/Dolphin/dolphinstaterc"
+    local state_dest="${XDG_STATE_HOME:-$HOME/.local/state}/dolphinstaterc"
+
+    if [[ ! -f "$state_src" ]]
+    then
+        warn "No dolphinstaterc in the payload; panel layout left at defaults."
+        return 0
+    fi
+
+    local blob
+    blob="$(awk '/^State=/ { print substr($0, 7); exit }' "$state_src")"
+    if [[ -z "$blob" ]]
+    then
+        warn "No State entry in the shipped dolphinstaterc; panels left alone."
+        return 0
+    fi
+
+    mkdir -p "$(dirname "$state_dest")"
+    if kwriteconfig6 --file "$state_dest" --group State --key State "$blob"
+    then
+        ok "Dolphin panel layout applied."
+    else
+        fail "Could not write $state_dest."
+    fi
 }
 
 # ------------------------------------------- 12. default image viewer -------
@@ -1808,7 +1872,7 @@ configure_panels()
 {
     step "18. Panels and system tray on every monitor"
 
-    local qdbus_cmd=""
+    local qdbus_cmd="" c
     for c in qdbus6 qdbus qdbus-qt6; do command -v "$c" >/dev/null && { qdbus_cmd="$c"; break; }; done
     if [[ -z "$qdbus_cmd" ]] || ! "$qdbus_cmd" org.kde.plasmashell >/dev/null 2>&1
     then
@@ -2019,6 +2083,10 @@ summary()
     info "The cursor, window decorations, panels and login screen all settle"
     info "on the next boot. A log out and back in covers most of it, but the"
     info "display manager change needs a full reboot."
+    echo
+    info "Flatpak apps are also missing from the application menu until then:"
+    info "XDG_DATA_DIRS only picks up the Flatpak export directories when a"
+    info "session starts, and this one began before Flatpak was installed."
 
     notify_desktop "Post-install setup finished" "$body" \
         || info "(No desktop session to notify -- terminal only.)"

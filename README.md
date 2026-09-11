@@ -113,7 +113,12 @@ idempotent.
 - **Step 11 needs the payload too.** Dolphin's toolbar buttons and menu
   structure live in `~/.local/share/kxmlgui5/dolphin/dolphinui.rc` (KF6 still
   uses the `kxmlgui5` directory name), not in `dolphinrc`, so that file ships in
-  `loose/` and is copied into place. Showing the menubar takes two settings,
+  `loose/` and is copied into place. Which panels are shown (Places yes;
+  Folders, Information and Terminal no) is a third place again: the
+  QMainWindow state blob, which KF6 keeps in
+  `~/.local/state/dolphinstaterc`. Only the `State` entry is copied, not the
+  window geometry keys stored beside it, since those are specific to the
+  machine that produced them. Showing the menubar takes two settings,
   not one: `[MainWindow] MenuBar=Enabled`, plus `[General] Version=202`.
   Dolphin treats `version < 200` as a first run and force hides the menubar
   after reading the config, so without the version bump the `MenuBar` setting
@@ -218,4 +223,12 @@ idempotent.
   `/etc/skel/Desktop`, so accounts created later get it as well. Those stay
   root-owned, and `useradd` reassigns them when it copies the skeleton. Needs
   root, since it writes into other users' homes and `/etc/skel`.
+- **Flatpak apps do not appear in the application menu until you reboot.**
+  `/etc/profile.d/flatpak.sh` adds the Flatpak export directories to
+  `XDG_DATA_DIRS`, but only when a session starts, and the session running the
+  script began before Flatpak was installed. Running `flatpak` by hand before
+  that reboot prints a warning about the same thing. Both are cosmetic and the
+  reboot clears them. Avoid running `flatpak` manually while the script is
+  working, though: it takes a lock on the system installation and the two can
+  block each other.
 - `cups-browsed` is installed but left disabled, matching the reference system.
