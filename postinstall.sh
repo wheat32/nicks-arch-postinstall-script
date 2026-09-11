@@ -677,9 +677,18 @@ setup_login_manager() {
         return 1
     fi
 
+    # On a fresh KDE install there is usually no display manager at all, so the
+    # alias simply won't exist and there is nothing to disable. Three cases:
+    # no alias, an alias pointing at a live unit, and a stale alias left behind
+    # by a removed one (which would otherwise make `systemctl enable` fail).
+    local dm_alias="/etc/systemd/system/display-manager.service"
     local current=""
-    if [[ -e /etc/systemd/system/display-manager.service ]]; then
-        current="$(basename "$(readlink -f /etc/systemd/system/display-manager.service)")"
+
+    if [[ -L "$dm_alias" && ! -e "$dm_alias" ]]; then
+        info "Clearing a stale display-manager.service link..."
+        sudo rm -f "$dm_alias" || warn "Could not remove the stale link."
+    elif [[ -e "$dm_alias" ]]; then
+        current="$(basename "$(readlink -f "$dm_alias" 2>/dev/null)" 2>/dev/null)"
     fi
 
     if [[ "$current" == "plasmalogin.service" ]]; then
@@ -691,6 +700,8 @@ setup_login_manager() {
         info "Disabling the current display manager ($current)..."
         sudo systemctl disable "$current" >/dev/null 2>&1 \
             || warn "Could not disable $current; enabling may fail."
+    else
+        info "No display manager is currently enabled."
     fi
 
     # Deliberately not --now: switching the display manager mid-session would
