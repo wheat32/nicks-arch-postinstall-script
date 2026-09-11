@@ -4,10 +4,7 @@ Post-install setup for a fresh Arch Linux + KDE Plasma machine.
 
 ## Status
 
-**Last confirmed working: 2026-09-11** — Arch Linux, KDE Plasma 6.7.5, GRUB,
-Plasma Login Manager.
-
-Update this line after each clean run on a fresh install.
+**Last confirmed working: 2026-09-11** — Arch Linux, KDE Plasma 6.7.5
 
 ## Running it
 
