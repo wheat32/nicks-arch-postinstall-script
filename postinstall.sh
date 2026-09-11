@@ -111,6 +111,16 @@ INSTALL_FLOORP=0
 INSTALL_THUNDERBIRD=0
 INSTALL_GAMES=0
 
+# Set by choose_theme_mode(); everything appearance-related keys off these.
+THEME_MODE="dark"
+LOOKANDFEEL="org.kde.breezedark.desktop"
+COLORSCHEME="BreezeDark"
+ICON_THEME="breeze-dark"
+DECORATION_THEME="WillowDark"
+
+# Kept from the reference system so a global-theme apply doesn't drop it.
+ACCENT_COLOR="#926EE4"
+
 pac_install() {
     (( $# )) || return 0
     sudo pacman -S --needed --noconfirm "$@"
@@ -145,7 +155,7 @@ preflight() {
 
     # A bare `pacman -Sy` followed by `-S` is a partial upgrade, which Arch
     # warns against, so bring the whole system up to date instead.
-    info "Synchronising databases and updating the system..."
+    info "Synchronizing databases and updating the system..."
     if sudo pacman -Syu --noconfirm; then
         ok "System up to date."
     else
@@ -519,12 +529,16 @@ deploy_loose_files() {
         info "Thunderbird: not installed / never launched -- skipped."
     fi
 
-    # --- Window decoration theme (step 11 applies it) ---
-    if [[ -d "$LOOSE/Window Decorations/WillowDark" ]]; then
-        mkdir -p "$HOME/.local/share/aurorae/themes"
-        cp -r "$LOOSE/Window Decorations/WillowDark" "$HOME/.local/share/aurorae/themes/"
-        ok "Willow Dark -> ~/.local/share/aurorae/themes/WillowDark"
-    fi
+    # --- Window decoration themes (step 11 applies whichever was chosen) ---
+    # Both variants are installed so switching light/dark later needs no re-run.
+    local deco
+    for deco in WillowDark WillowLight; do
+        if [[ -d "$LOOSE/Window Decorations/$deco" ]]; then
+            mkdir -p "$HOME/.local/share/aurorae/themes"
+            cp -r "$LOOSE/Window Decorations/$deco" "$HOME/.local/share/aurorae/themes/"
+            ok "$deco -> ~/.local/share/aurorae/themes/$deco"
+        fi
+    done
 
     # --- Reference docs, kept out of any profile on purpose ---
     local doc="$cfg/documentation (DO NOT PUT IN FIREFOX PROFILE).txt"
@@ -579,6 +593,64 @@ configure_dolphin() {
     ok "dolphinrc written."
 }
 
+# ------------------------------------------- light / dark mode + appearance --
+
+choose_theme_mode() {
+    step "Appearance: light or dark mode"
+    echo
+    info "  1) Dark  -- Breeze Dark, dark icons, Willow Dark window decorations"
+    info "  2) Light -- Breeze Light, light icons, Willow Light window decorations"
+    echo
+    local choice
+    read -r -p "    Selection [1]: " choice </dev/tty
+    choice="${choice:-1}"
+
+    case "$choice" in
+        2|light|Light|LIGHT)
+            THEME_MODE="light"
+            LOOKANDFEEL="org.kde.breeze.desktop"
+            COLORSCHEME="BreezeLight"
+            ICON_THEME="breeze"
+            DECORATION_THEME="WillowLight"
+            ;;
+        *)
+            THEME_MODE="dark"
+            LOOKANDFEEL="org.kde.breezedark.desktop"
+            COLORSCHEME="BreezeDark"
+            ICON_THEME="breeze-dark"
+            DECORATION_THEME="WillowDark"
+            ;;
+    esac
+    ok "Using ${THEME_MODE} mode."
+}
+
+apply_theme_mode() {
+    step "Applying the ${THEME_MODE} theme"
+
+    # -a applies appearance only; --resetLayout (which would wipe the panels)
+    # is deliberately not passed.
+    if command -v plasma-apply-lookandfeel >/dev/null \
+       && plasma-apply-lookandfeel -a "$LOOKANDFEEL" >/dev/null 2>&1; then
+        ok "Global theme set to $LOOKANDFEEL."
+    else
+        # No Plasma session (or the tool is missing) -- write the config directly.
+        kw "$HOME/.config/kdeglobals" KDE LookAndFeelPackage "$LOOKANDFEEL"
+        warn "Could not apply the global theme live; wrote it to kdeglobals instead."
+    fi
+
+    if command -v plasma-apply-colorscheme >/dev/null \
+       && plasma-apply-colorscheme "$COLORSCHEME" -a "$ACCENT_COLOR" >/dev/null 2>&1; then
+        ok "Color scheme set to $COLORSCHEME (accent $ACCENT_COLOR)."
+    else
+        kw "$HOME/.config/kdeglobals" General ColorScheme "$COLORSCHEME"
+        kw "$HOME/.config/kdeglobals" General AccentColor "146,110,228"
+        warn "Could not apply the color scheme live; wrote it to kdeglobals instead."
+    fi
+
+    kw "$HOME/.config/kdeglobals" Icons Theme "$ICON_THEME"
+    ok "Icon theme set to $ICON_THEME."
+}
+
 # ---------------------------------------------------------- 10. cursor ------
 
 configure_cursor() {
@@ -607,24 +679,24 @@ configure_cursor() {
 # ----------------------------------------------- 11. window decorations -----
 
 configure_decorations() {
-    step "11. Window decorations (Willow Dark)"
-    local theme_dir="$HOME/.local/share/aurorae/themes/WillowDark"
+    step "11. Window decorations ($DECORATION_THEME)"
+    local theme_dir="$HOME/.local/share/aurorae/themes/$DECORATION_THEME"
 
     if [[ ! -d "$theme_dir" ]]; then
-        fail "WillowDark aurorae theme is missing; skipping."
+        fail "$DECORATION_THEME aurorae theme is missing; skipping."
         return 1
     fi
 
     local f="$HOME/.config/kwinrc"
     kw "$f" org.kde.kdecoration2 library org.kde.kwin.aurorae.v2
-    kw "$f" org.kde.kdecoration2 theme "__aurorae__svg__WillowDark"
+    kw "$f" org.kde.kdecoration2 theme "__aurorae__svg__$DECORATION_THEME"
     kw "$f" org.kde.kdecoration2 ButtonsOnLeft "M"
 
     # Ask KWin to pick it up now if a session is running.
     qdbus6 org.kde.KWin /KWin reconfigure >/dev/null 2>&1 \
         || qdbus org.kde.KWin /KWin reconfigure >/dev/null 2>&1 || true
 
-    ok "Willow Dark set as the window decoration."
+    ok "$DECORATION_THEME set as the window decoration."
 }
 
 # ---------------------------------------------------------- 12. printing ----
@@ -824,7 +896,7 @@ install_office() {
         2) picks=( com.collaboraoffice.Office ) ;;
         3) picks=( org.libreoffice.LibreOffice com.collaboraoffice.Office ) ;;
         4|"") info "Skipped."; return 0 ;;
-        *) warn "Unrecognised choice '$choice' -- skipping."; return 0 ;;
+        *) warn "Unrecognized choice '$choice' -- skipping."; return 0 ;;
     esac
 
     if flatpak_install "${picks[@]}"; then
@@ -871,6 +943,8 @@ main() {
     deploy_loose_files     # 7
     install_games          # 8
     configure_dolphin      # 9
+    choose_theme_mode      # light or dark
+    apply_theme_mode
     configure_cursor       # 10
     configure_decorations  # 11
     setup_printing         # 12

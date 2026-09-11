@@ -31,11 +31,12 @@ Set `REPO_BRANCH=somebranch` to pull the payload from a different branch.
 | 4 | Asks which browsers you want (Floorp / Firefox / Ungoogled Chromium / Brave) and installs them as Flatpaks |
 | 5 | Grants Floorp read/write access to `$HOME` |
 | 6 | Asks whether to install Thunderbird |
-| 7 | Deploys the `loose/` files (`userChrome.css` per browser profile, the Willow Dark theme, reference notes) |
+| 7 | Deploys the `loose/` files (`userChrome.css` per browser profile, both Willow themes, reference notes) |
 | 8 | Asks whether to install the KDE games |
 | 9 | Writes the Dolphin settings |
+| – | Asks for **light or dark mode** and applies the global theme, color scheme and icons |
 | 10 | Sets the Breeze Light cursor theme |
-| 11 | Installs and applies the Willow Dark window decoration |
+| 11 | Installs both Willow decorations and applies the one matching your light/dark choice |
 | 12 | Installs the CUPS/foomatic/gutenprint stack and enables `cups.socket` + `cups.service` |
 | 13 | Installs Hunspell/Aspell/Enchant and configures Sonnet for `en_US` |
 | 14 | Rebuilds an identical panel + system tray on every monitor at least 1024px wide |
@@ -62,4 +63,13 @@ idempotent.
   Screens narrower than 1024px are skipped so a small capture/TV output
   doesn't get an unusable taskbar. Override with
   `PANEL_MIN_SCREEN_WIDTH=0 bash postinstall.sh`.
+- **Light/dark mode** sets the global theme (`org.kde.breeze.desktop` /
+  `org.kde.breezedark.desktop`), the color scheme (`BreezeLight` / `BreezeDark`,
+  keeping the `#926EE4` accent) and the icon theme (`breeze` / `breeze-dark`),
+  and picks Willow Light or Willow Dark for the window decorations. The theme is
+  applied without `--resetLayout`, so it does not disturb the panels.
+  Both Willow variants are installed either way, so switching later is just a
+  System Settings change.
+- The **cursor is Breeze Light in both modes**, by design — it does not follow
+  the light/dark choice.
 - `cups-browsed` is installed but left disabled, matching the reference system.
