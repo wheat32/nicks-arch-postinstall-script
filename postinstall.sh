@@ -64,6 +64,24 @@ trap cleanup EXIT
 # there is no controlling terminal. Actually try it.
 have_tty() { { : </dev/tty; } 2>/dev/null; }
 
+# Read an application's display name out of its .desktop file, so a name the
+# project may change upstream is never hardcoded. Falls back to $2.
+desktop_app_name() {
+    local file="$1" fallback="$2" dir name=""
+    for dir in /usr/share/applications /usr/local/share/applications \
+               "$HOME/.local/share/applications" \
+               /var/lib/flatpak/exports/share/applications; do
+        [[ -r "$dir/$file" ]] || continue
+        name="$(awk -F= '
+            /^\[Desktop Entry\]/ { e = 1; next }
+            /^\[/                 { e = 0 }
+            e && /^Name=/         { sub(/^Name=/, ""); print; exit }
+        ' "$dir/$file")"
+        [[ -n "$name" ]] && break
+    done
+    printf '%s\n' "${name:-$fallback}"
+}
+
 # Present a numbered menu and collect a space-separated selection ("1 3"), or
 # nothing for none. Results land in SELECTED as 1-based indices, de-duplicated
 # and in the order the user typed them.
@@ -77,7 +95,8 @@ ask_multi() {
         printf '      %d) %s\n' $((i + 1)) "${names[$i]}"
     done
     echo
-    info "Enter the numbers you want, space separated (e.g. \"1 2\"), or blank for none."
+    info "Enter the number(s) you want, separated by spaces (e.g. \"1\" or \"1 2\"),"
+    info "or leave it blank for none."
     read -r -p "    Selection: " -a picks </dev/tty
 
     for n in "${picks[@]}"; do
@@ -146,8 +165,8 @@ PKGS_GAMES=( kbreakout kmahjongg kmines kpat ksudoku libkdegames )
 # Packages to take back off the system if an installer or an earlier setup left
 # them behind. Nothing here is ever installed by this script.
 #
-#   gwenview    -- superseded by Photos (package "koko"), which is proposed as
-#                  its replacement as of KDE Gear 26.08.
+#   gwenview    -- superseded by the koko package, which is proposed as its
+#                  replacement as of KDE Gear 26.08.
 #   pavucontrol -- a standalone GTK mixer some installers add by name (the
 #                  EndeavourOS one does). Unrelated to plasma-pa, which is what
 #                  actually provides the tray volume applet, the Sound page in
@@ -195,9 +214,9 @@ MENU_HIDE=(
 # Plasma itself writes.
 TRASH_DESKTOP_NAME=$'trash:\u2044.desktop'
 
-# Photos' desktop file. The Default Applications KCM keys its "Image viewer"
-# dropdown off image/png alone, so that entry is what makes System Settings
-# read "Photos"; the rest are set so every image type actually opens in it.
+# The image viewer's desktop file. The Default Applications KCM keys its
+# "Image viewer" dropdown off image/png alone, so that entry is what makes
+# System Settings show it; the rest are set so every image type opens in it.
 KOKO_DESKTOP="org.kde.koko.desktop"
 KOKO_IMAGE_TYPES=(
     image/png image/jpeg image/gif image/bmp image/tiff
@@ -239,7 +258,7 @@ STEPS=(
     "9|deploy_loose_files|Deploy the loose/ config files|files|0"
     "10|install_games|KDE games|games|1"
     "11|configure_dolphin|Dolphin settings|dolphin|0"
-    "12|configure_default_image_viewer|Default image viewer (Photos)|imageviewer|0"
+    "12|configure_default_image_viewer|Default image viewer|imageviewer|0"
     "13|run_theme_mode|Light or dark mode|theme|1"
     "14|configure_cursor|Cursor theme|cursor|1"
     "15|configure_decorations|Window decorations|decorations|0"
@@ -1259,8 +1278,14 @@ configure_dolphin() {
     kw "$f" PlacesPanel IconSize 32
     kw "$f" Search SearchTool Baloo
 
-    # Show the menubar instead of the hamburger button. Recent Dolphin hides it
-    # by default, so it has to be set explicitly rather than left unset.
+    # Dolphin treats "GeneralSettings::version() < 200" as a first run and force
+    # hides the menubar, which overrides the MenuBar setting below no matter what
+    # it says. Claiming the current config version stops that, and on a fresh
+    # config there is nothing for the skipped migrations to do anyway.
+    kw "$f" General Version 202
+    kw "$f" General ViewPropsTimestamp "$(date '+%Y,%-m,%-d,%-H,%-M,%-S.000')"
+
+    # Show the menubar rather than the hamburger button.
     kw "$f" MainWindow MenuBar Enabled
     kw "$f" PreviewSettings Plugins \
         "ffmpegthumbnailer,appimagethumbnail,audiothumbnail,blenderthumbnail,comicbookthumbnail,cursorthumbnail,djvuthumbnail,ebookthumbnail,exrthumbnail,directorythumbnail,fontthumbnail,imagethumbnail,jpegthumbnail,kraorathumbnail,windowsexethumbnail,windowsimagethumbnail,mobithumbnail,opendocumentthumbnail,gsthumbnail,rawthumbnail,svgthumbnail,ffmpegthumbs,gdk-pixbuf-thumbnailer,gsf-office"
@@ -1288,7 +1313,12 @@ configure_dolphin() {
 # ------------------------------------------- 12. default image viewer -------
 
 configure_default_image_viewer() {
-    step "12. Default image viewer (Photos)"
+    # koko is the package name; its menu name has changed before, so take it
+    # from the .desktop file rather than assuming.
+    local app
+    app="$(desktop_app_name "$KOKO_DESKTOP" "koko")"
+
+    step "12. Default image viewer ($app)"
 
     if ! pacman -Qq koko >/dev/null 2>&1; then
         fail "koko is not installed; leaving the image associations alone."
@@ -1303,10 +1333,10 @@ configure_default_image_viewer() {
     done
 
     # Matches what the KCM itself writes, so System Settings ->
-    # Default Applications -> Multimedia shows "Image viewer: Photos".
+    # Default Applications -> Multimedia shows this app as the image viewer.
     kwriteconfig6 --file "$f" --group "Added Associations" --key "image/png" "$KOKO_DESKTOP;"
 
-    ok "Photos set as the default image viewer."
+    ok "$app set as the default image viewer."
 }
 
 # ------------------------------------------- light / dark mode + appearance --

@@ -71,7 +71,7 @@ infers the variant from the look-and-feel already in use instead.
 | 9 | Deploys the `loose/` files (`userChrome.css` per browser profile, both Willow themes, reference notes) |
 | 10 | Asks whether to install the KDE games |
 | 11 | Writes the Dolphin settings, shows the menubar, and applies the toolbar/menu layout |
-| 12 | Makes Photos (`koko`) the default image viewer |
+| 12 | Makes the `koko` image viewer the system default |
 | 13 | Asks for light or dark mode, then applies the global theme, color scheme and icons |
 | 14 | Sets the Breeze Light cursor theme |
 | 15 | Installs both Willow decorations and applies the one matching your light/dark choice |
@@ -95,8 +95,8 @@ idempotent.
 - **Step 5 touches GRUB as little as possible.** It first reads the existing
   menu and works out which kernel the current `GRUB_DEFAULT` actually boots.
   Numeric (`0`), nested numeric (`1>2`), menuentry-id and `saved` forms are all
-  understood. If that is already the kernel you picked, it changes nothing at all
-  and does not regenerate anything. Otherwise it rewrites only the
+  understood. If that is already the kernel you picked, it changes nothing
+  at all and does not regenerate anything. Otherwise it rewrites only the
   `GRUB_DEFAULT` line and regenerates once with
   `grub-mkconfig -o /boot/grub/grub.cfg` (the Arch equivalent of
   `update-grub`), which is unavoidable because `GRUB_DEFAULT` is only read at
@@ -108,11 +108,14 @@ idempotent.
 - **Step 11 needs the payload too.** Dolphin's toolbar buttons and menu
   structure live in `~/.local/share/kxmlgui5/dolphin/dolphinui.rc` (KF6 still
   uses the `kxmlgui5` directory name), not in `dolphinrc`, so that file ships in
-  `loose/` and is copied into place. The menubar is switched on explicitly with
-  `[MainWindow] MenuBar=Enabled`, because recent Dolphin hides it behind the
-  hamburger button by default. Leaving it unset is not the same as showing it. If a
-  future Dolphin raises its own `version=` above the one in the shipped file,
-  KXMLGUI may discard the customization and fall back to defaults.
+  `loose/` and is copied into place. Showing the menubar takes two settings,
+  not one: `[MainWindow] MenuBar=Enabled`, plus `[General] Version=202`.
+  Dolphin treats `version < 200` as a first run and force hides the menubar
+  after reading the config, so without the version bump the `MenuBar` setting
+  has no effect. On a fresh config the migrations that version gates are no-ops
+  anyway. If a future Dolphin raises its own `version=` above the one in the
+  shipped `dolphinui.rc`, KXMLGUI may discard the toolbar customization and
+  fall back to defaults.
 - **Step 9** can only place `userChrome.css` in a profile that already exists.
   A freshly installed Flatpak has no profile until you launch it once. If the
   script reports a skip, start the app and re-run.
@@ -143,9 +146,9 @@ idempotent.
   installed. Only one unit can hold the `display-manager.service` alias, so any
   existing display manager is disabled first, and if enabling fails the
   previous one is put back so the machine is never left without a login screen.
-  It is enabled but **not** started, since switching display managers mid-session
-  would kill the running desktop: it takes effect on the next reboot. An SDDM
-  that is already installed is left on disk, just disabled.
+  It is enabled but **not** started, since switching display managers
+  mid-session would kill the running desktop: it takes effect on the next
+  reboot. An SDDM that is already installed is left on disk, just disabled.
 - The **login screen follows the light/dark choice too.** The greeter runs as
   its own system user and reads its own config, not yours, which is why it
   otherwise stays light. The script writes the color scheme, icon theme and
@@ -163,12 +166,12 @@ idempotent.
   Skipped entirely if `[chaotic-aur]` is already present. This is a third-party
   repository. Adding it means trusting its maintainers to ship packages that
   run as root on your machine.
-- **Photos instead of Gwenview.** Photos is packaged as `koko`, and as of
-  KDE Gear 26.08 it is [proposed as Gwenview's replacement][photos]. The script
-  installs `koko` and removes `gwenview` if a previous install left it behind
-  (`pacman -Rns`, skipped when it isn't installed, reported rather than forced
-  if something still requires it). Add packages to `PKGS_REMOVE` to retire
-  others the same way.
+- **`koko` instead of Gwenview.** As of KDE Gear 26.08 it is
+  [proposed as Gwenview's replacement][photos] (it ships under the menu name
+  "Photos" at the moment). The script installs `koko` and removes `gwenview` if
+  a previous install left it behind (`pacman -Rns`, skipped when it isn't
+  installed, reported rather than forced if something still requires it). Add
+  packages to `PKGS_REMOVE` to retire others the same way.
 
 [photos]: https://pointieststick.com/2026/09/06/photos-a-proposed-replacement-for-gwenview/
 
@@ -177,12 +180,14 @@ idempotent.
   both. Both live in Chaotic-AUR, so this is a normal `pacman` install; if the
   repository isn't available the step falls back to building from the AUR with
   `git` + `makepkg`.
-- **Photos as the default image viewer.** The Default Applications KCM keys its
-  *Multimedia → Image viewer* dropdown off `image/png` alone, so that entry is
+- **`koko` as the default image viewer.** The Default Applications KCM keys its
+  *Multimedia > Image viewer* dropdown off `image/png` alone, so that entry is
   written to both `[Added Associations]` and `[Default Applications]` in
-  `~/.config/mimeapps.list`, which is what makes System Settings read
-  "Photos". The other image types Photos handles are set as defaults too, so
-  every image actually opens in it. Video types it also claims are left alone.
+  `~/.config/mimeapps.list`, which is what makes System Settings show it. The
+  other image types it handles are set as defaults too, so every image actually
+  opens in it. Video types it also claims are left alone. The app's display
+  name (currently "Photos") is read from its `.desktop` file at run time rather
+  than hardcoded, since upstream has changed it before.
 - **Application menu cleanup (step 21)** is opt-in. It hides these entries:
   Icon Browser, Meld, Qt Assistant, Qt D-Bus Viewer, Qt Linguist, Qt Widgets
   Designer, Qt V4L2 test Utility, Qt V4L2 video capture utility, UXTerm, XTerm
