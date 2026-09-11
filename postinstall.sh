@@ -34,6 +34,10 @@ fail() { err "$*"; FAILURES+=("$*"); }
 cleanup() { [[ -n "$WORKDIR" && -d "$WORKDIR" ]] && rm -rf "$WORKDIR"; }
 trap cleanup EXIT
 
+# -r on /dev/tty is not enough: the file can exist and still fail to open when
+# there is no controlling terminal. Actually try it.
+have_tty() { { : </dev/tty; } 2>/dev/null; }
+
 # Ask a yes/no question. Default is "no" unless $2 is "y".
 ask_yn() {
     local prompt="$1" default="${2:-n}" reply hint="[y/N]"
@@ -131,6 +135,62 @@ flatpak_install() {
     sudo flatpak install -y --system --noninteractive flathub "$@"
 }
 
+# --------------------------------------------------------------- intro ------
+
+show_intro() {
+    printf '\n%sArch Linux post-install setup%s\n' "$C_BOLD$C_BLUE" "$C_RESET"
+    printf '%s\n' "-------------------------------------------------------------"
+    cat <<'INTRO'
+
+  This sets up a fresh Arch Linux + KDE Plasma install. It will:
+
+     1.  Enable and start Bluetooth
+     2.  Point the bootloader at the newest installed kernel
+     3.  Install the KDE/Plasma packages, Discover, Flatpak and XDG portals
+     4.  Install the browsers you pick, as Flatpaks
+     5.  Give Floorp read/write access to your home directory
+     6.  Install Thunderbird, if you want it
+     7.  Drop the userChrome.css files and window decorations into place
+     8.  Install the KDE games, if you want them
+     9.  Apply your Dolphin settings
+    10.  Set the Breeze Light cursor
+    11.  Apply the Willow window decorations
+    12.  Install and enable printing (CUPS, foomatic, gutenprint)
+    13.  Install Hunspell and configure spell checking for en_US
+    14.  Rebuild a matching panel and system tray on every monitor
+    15.  Install Wine
+    16.  Install an office suite, if you want one
+
+  You will be asked about:
+
+    - Which browsers you want (Floorp, Firefox, Ungoogled Chromium, Brave)
+    - Thunderbird
+    - The KDE games
+    - Light or dark mode
+    - An office suite (LibreOffice, Collabora Office, both, or neither)
+
+  Worth knowing before you start:
+
+    - It runs a full system upgrade (pacman -Syu) first
+    - It asks for your sudo password up front, and keeps it alive
+    - /etc/default/grub is backed up before it is edited
+    - Your Plasma panels are deleted and rebuilt, which resets pinned
+      launchers back to the defaults
+    - Configuration files are downloaded from GitHub, not read from disk
+
+  Nothing has been changed yet.
+
+INTRO
+
+    if have_tty; then
+        printf '  %sPress Enter to begin, or Ctrl+C to abort.%s ' "$C_BOLD" "$C_RESET"
+        read -r </dev/tty
+        echo
+    else
+        warn "No terminal attached; starting without waiting."
+    fi
+}
+
 # ------------------------------------------------------------ preflight -----
 
 preflight() {
@@ -147,6 +207,14 @@ preflight() {
     for c in curl tar sudo; do
         command -v "$c" >/dev/null || { err "Missing required tool: $c"; exit 1; }
     done
+
+    # Every prompt in this script reads from /dev/tty, so there is no point
+    # continuing without one.
+    if ! have_tty; then
+        err "No controlling terminal, but this script is interactive."
+        err "Run it from a terminal. 'curl ... | bash' is fine; cron and CI are not."
+        exit 1
+    fi
 
     info "Caching sudo credentials..."
     sudo -v || { err "sudo failed."; exit 1; }
@@ -930,7 +998,7 @@ summary() {
 # ---------------------------------------------------------------- main ------
 
 main() {
-    printf '%s\n' "$C_BOLD${C_BLUE}Arch Linux post-install setup$C_RESET"
+    show_intro
 
     preflight
     fetch_payload
