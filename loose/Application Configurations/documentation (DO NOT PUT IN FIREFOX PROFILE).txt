@@ -1,0 +1,46 @@
+Enable Firefox Customization via userChrome.css
+
+Firefox disables userChrome.css by default. You'll need to enable it:
+
+1) Open Firefox and type about:config in the address bar, then press Enter.
+2) Search for the setting toolkit.legacyUserProfileCustomizations.stylesheets.
+3) Set it to true by double-clicking it.
+
+Locate Your Firefox Profile Folder
+
+You need to place the userChrome.css file in the correct location:
+
+1) In Firefox, type about:profiles in the address bar, then press Enter.
+2) Locate the profile marked as Default Profile and click Open Folder under the "Root Directory."
+
+Key CSS Classes for Window Buttons
+
+    .titlebar-buttonbox-container
+        Container for the titlebar buttons (minimize, maximize, close).
+        You can adjust spacing, size, and alignment of the buttons here.
+
+    .titlebar-button
+        General class for individual titlebar buttons.
+        Use this to style all buttons (minimize, maximize, close) uniformly.
+
+    .titlebar-min
+        Specific class for the Minimize button.
+        Allows individual styling of the minimize button.
+
+    .titlebar-max, .titlebar-restore
+        Specific class for the Maximize/Restore button.
+        Allows individual styling of the maximize/restore button.
+
+    .titlebar-close
+        Specific class for the Close button.
+        This is commonly styled differently, e.g., with a red background or bold hover effects.
+
+Additional States
+
+    :hover
+        Use to define hover effects for any button, e.g., color changes, scaling.
+        Example: .titlebar-close:hover.
+
+    :active
+        Use to define behavior when the button is pressed/clicked.
+        Example: .titlebar-max:active.

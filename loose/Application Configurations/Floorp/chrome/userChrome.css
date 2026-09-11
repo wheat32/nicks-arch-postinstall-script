@@ -1,0 +1,149 @@
+
+/*************************************************************************************************************************************************************************************************************************************************************
+
+"userChrome.css" is a custom CSS file that can be used to specify CSS style rules for Floorp's interface (NOT internal site) using "chrome" privileges.
+For instance, if you want to hide the tab bar, you can use the following CSS rule:
+
+**************************************
+#TabsToolbar {                       *
+    display: none !important;        *
+}                                    *
+**************************************
+
+NOTE: You can use the userChrome.css file without change preferences (about:config)
+
+Quote: https://userChrome.org | https://github.com/topics/userchrome 
+
+************************************************************************************************************************************************************************************************************************************************************/
+
+@charset "UTF-8";
+@-moz-document url(chrome://browser/content/browser.xhtml) {
+/* Please write your custom CSS under this line*/
+.titlebar-buttonbox-container
+{
+    width: calc(3.4rem * 3) !important;
+}
+
+.titlebar-button
+{
+    width: 3.4rem !important;
+    font-size: 2rem !important;
+    margin: 0 !important;
+    padding: 0 !important;
+}
+
+.titlebar-button > *
+{
+    background-color: transparent !important;
+}
+
+.titlebar-close:hover
+{
+    background-color: red !important;
+}
+
+.titlebar-close:active
+{
+    filter: brightness(82%) !important;
+}
+
+
+.titlebar-min:hover, .titlebar-max:hover, .titlebar-restore:hover
+{
+    background-color: #404040 !important;
+}
+
+.titlebar-min:active, .titlebar-max:active, .titlebar-restore:active
+{
+    filter: brightness(133%) !important;
+}
+
+/* Minimize: force our own glyph and stop any native/arrow overlay */
+.titlebar-min
+{
+    appearance: none !important;
+    -moz-default-appearance: none !important;
+    position: relative !important;   /* so the ::before can be positioned */
+}
+
+/* hide stock icon/animation layers that can draw a down-arrow */
+.titlebar-min > .toolbarbutton-icon,
+.titlebar-min .toolbarbutton-animatable-box,
+.titlebar-min .toolbarbutton-badge-stack
+{
+    display: none !important;
+}
+
+/* draw a Windows-like horizontal line, using currentColor (white on dark) */
+.titlebar-min::before
+{
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);  /* centers horizontally & vertically */
+    width: 12px;                       /* line length */
+    height: 2px;                       /* line thickness */
+    background: currentColor;          /* respects theme */
+    border-radius: 1px;
+}
+
+/* Hide duplicate window controls that show up on the tab row */
+#TabsToolbar .titlebar-buttonbox-container,
+#TabsToolbar .titlebar-buttonbox,
+#TabsToolbar .titlebar-button
+{
+    display: none !important;
+}
+
+/* Optional: tidy spacing on the right edge of the Tabs toolbar */
+#TabsToolbar .titlebar-spacer[type="post-tabs"]
+{
+    display: none !important;
+}
+
+#main-window
+{
+    min-width: 40rem !important; /* Set minimum width */
+}
+
+#toolbar-menubar
+{
+    margin-bottom: 0 !important;
+    padding-bottom: 0 !important;
+    height: 2.45rem !important;
+}
+
+.tabbrowser-tab
+{
+    margin-top: 0 !important;
+}
+
+.titlebar-max > .toolbarbutton-icon
+{
+    background-image: none !important;
+    border: 2px solid !important;
+    border-radius: 0 !important;
+    scale: 0.3;
+}
+
+#toolbar-menubar {
+    &[autohide] {
+        :root[customtitlebar] #navigator-toolbox:not([tabs-hidden]) > & {
+            min-height: unset !important;
+        }
+    }
+}
+
+#toolbar-menubar {
+&[autohide] {
+    &[inactive]:not([customizing]) {
+        min-height: unset !important;
+        padding: 1px 0 !important;
+        appearance: unset !important;
+    }
+}
+}
+
+
+}

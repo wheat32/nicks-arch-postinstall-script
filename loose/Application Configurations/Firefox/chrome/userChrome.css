@@ -1,0 +1,44 @@
+.titlebar-buttonbox-container
+{
+    width: calc(3.4rem * 3) !important;
+}
+
+.titlebar-button
+{
+    width: 3.4rem !important;
+    font-size: 2rem !important;
+    margin: 0 !important;
+    padding: 0 !important;
+}
+
+.titlebar-button > *
+{
+    background-color: transparent !important;
+}
+
+.titlebar-close:hover
+{
+    background-color: red !important;
+}
+
+.titlebar-close:active
+{
+    filter: brightness(82%) !important;
+}
+
+
+.titlebar-min:hover, .titlebar-max:hover, .titlebar-restore:hover
+{
+    background-color: #404040 !important;
+}
+
+.titlebar-min:active, .titlebar-max:active, .titlebar-restore:active
+{
+    filter: brightness(133%) !important;
+}
+
+#main-window
+{
+    min-width: 37rem !important; /* Set minimum width */
+}
+

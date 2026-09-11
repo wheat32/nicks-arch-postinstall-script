@@ -1,0 +1,91 @@
+.titlebar-buttonbox-container
+{
+    width: calc(3.35rem * 3) !important;
+    height: 3.49rem;
+}
+
+.titlebar-button
+{
+    width: 3.4rem !important;
+    font-size: 2rem !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    position: relative !important; /* Ensure proper positioning */
+}
+
+.titlebar-button > *
+{
+    background-color: transparent !important;
+    position: absolute !important; /* Absolute positioning to center the icon */
+    top: 50% !important;          /* Move to the middle */
+    left: 50% !important;         /* Move to the middle */
+    transform: translate(-50%, -50%) !important; /* Center the icon */
+}
+
+.titlebar-close:hover
+{
+    background-color: red !important;
+}
+
+.titlebar-close:active
+{
+    filter: brightness(82%) !important;
+}
+
+
+.titlebar-min:hover, .titlebar-max:hover, .titlebar-restore:hover
+{
+    background-color: #404040 !important;
+}
+
+.titlebar-min:active, .titlebar-max:active, .titlebar-restore:active
+{
+    filter: brightness(133%) !important;
+}
+
+/* Minimize: force our own glyph and stop any native/arrow overlay */
+.titlebar-min
+{
+    appearance: none !important;
+    -moz-default-appearance: none !important;
+    position: relative !important;   /* so the ::before can be positioned */
+}
+
+/* hide stock icon/animation layers that can draw a down-arrow */
+.titlebar-min > .toolbarbutton-icon,
+.titlebar-min .toolbarbutton-animatable-box,
+.titlebar-min .toolbarbutton-badge-stack
+{
+    display: none !important;
+}
+
+/* draw a Windows-like horizontal line, using currentColor (white on dark) */
+.titlebar-min::before
+{
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);  /* centers horizontally & vertically */
+    width: 12px;                       /* line length */
+    height: 2px;                       /* line thickness */
+    background: currentColor;          /* respects theme */
+    border-radius: 1px;
+}
+
+.titlebar-max > .toolbarbutton-icon
+{
+    background-image: none !important;
+    border: 2px solid !important;
+    border-radius: 0 !important;
+    scale: 0.39;
+    top: unset !important;
+    left: unset !important;
+    transform: unset !important;
+}
+
+#main-window
+{
+    min-width: 37rem !important; /* Set minimum width */
+}
+
