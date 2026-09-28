@@ -162,7 +162,7 @@ PKGS_BASE=(
     kde-cli-tools kwayland kwayland-integration flatpak-kcm plymouth-kcm
     print-manager
     # --- window manager + decorations ---
-    kwin kwin-x11 kdecoration aurorae
+    kwin kdecoration aurorae
     # --- themes / look & feel ---
     breeze breeze-gtk breeze-cursors breeze-plymouth kde-gtk-config
     qqc2-breeze-style oxygen oxygen-cursors oxygen-sounds ocean-sound-theme
@@ -190,8 +190,8 @@ PKGS_PRINT=(
     ghostscript gsfonts gutenprint system-config-printer python-pycups
 )
 
-# Sonnet (the KDE spell-checking framework) backs onto hunspell/aspell/enchant.
-PKGS_SPELL=( hunspell hunspell-en_us aspell enchant )
+# Sonnet (the KDE spell-checking framework) uses hunspell as its backend.
+PKGS_SPELL=( hunspell hunspell-en_us )
 
 PKGS_WINE=( wine wine-mono )
 

@@ -81,7 +81,7 @@ infers the variant from the look-and-feel already in use instead.
 | 14 | Sets the Breeze Light cursor theme |
 | 15 | Installs both Willow decorations and applies the one matching your light/dark choice |
 | 16 | Installs the CUPS/foomatic/gutenprint stack and enables `cups.socket` + `cups.service` |
-| 17 | Installs Hunspell/Aspell/Enchant and configures Sonnet for `en_US` |
+| 17 | Installs Hunspell and the en_US dictionary, and configures Sonnet for `en_US` |
 | 18 | Rebuilds an identical panel + system tray on every monitor at least 1024px wide |
 | 19 | Installs Wine (offering to enable `[multilib]` first) |
 | 20 | Asks which office suites you want (LibreOffice / Collabora Office), same numbered selection as the browsers |
