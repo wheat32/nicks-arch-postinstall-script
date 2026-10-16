@@ -158,7 +158,7 @@ PKGS_BASE=(
     kdeplasma-addons systemsettings kinfocenter kmenuedit kscreen libkscreen
     kscreenlocker kwrited krdp kglobalacceld kactivitymanagerd ksystemstats
     libksysguard kpipewire milou powerdevil knighttime layer-shell-qt
-    drkonqi polkit-kde-agent kwallet-pam plasma-login-manager kgamma spectacle
+    drkonqi polkit-kde-agent kwallet-pam plasma-login-manager spectacle
     kde-cli-tools kwayland kwayland-integration flatpak-kcm plymouth-kcm
     print-manager
     # --- window manager + decorations ---
